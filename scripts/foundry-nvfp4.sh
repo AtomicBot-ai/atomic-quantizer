@@ -834,81 +834,88 @@ almost every position. nvfp4_kld.py reports the mass it did not see.
 import argparse, json, os, sys, time
 import numpy as np
 
-ap = argparse.ArgumentParser()
-ap.add_argument("model"); ap.add_argument("out_prefix")
-ap.add_argument("--corpora", nargs="+", required=True)
-ap.add_argument("--tp", type=int, default=8)
-ap.add_argument("--ctx", type=int, default=4096)
-ap.add_argument("--chunks", type=int, default=24)
-ap.add_argument("--topk", type=int, default=512)
-ap.add_argument("--batch", type=int, default=4, help="windows per generate() call")
-ap.add_argument("--gpu-mem", type=float, default=0.90)
-ap.add_argument("--kv-cache-dtype", default="auto")
-a = ap.parse_args()
+def main():
+    # vLLM starts its workers with multiprocessing spawn, which re-imports __main__;
+    # without this guard every worker would re-run the script from the top.
+    ap = argparse.ArgumentParser()
+    ap.add_argument("model"); ap.add_argument("out_prefix")
+    ap.add_argument("--corpora", nargs="+", required=True)
+    ap.add_argument("--tp", type=int, default=8)
+    ap.add_argument("--ctx", type=int, default=4096)
+    ap.add_argument("--chunks", type=int, default=24)
+    ap.add_argument("--topk", type=int, default=512)
+    ap.add_argument("--batch", type=int, default=4, help="windows per generate() call")
+    ap.add_argument("--gpu-mem", type=float, default=0.90)
+    ap.add_argument("--kv-cache-dtype", default="auto")
+    a = ap.parse_args()
 
-from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
+    from transformers import AutoTokenizer
+    from vllm import LLM, SamplingParams
 
-tok = AutoTokenizer.from_pretrained(a.model)
-bos = tok.bos_token_id
-assert bos is not None, "tokenizer has no BOS id"
-body = a.ctx - 1
-first = a.ctx // 2  # first scored position inside a window
-K = a.topk
+    tok = AutoTokenizer.from_pretrained(a.model)
+    bos = tok.bos_token_id
+    assert bos is not None, "tokenizer has no BOS id"
+    body = a.ctx - 1
+    first = a.ctx // 2  # first scored position inside a window
+    K = a.topk
 
-# Tokenize everything before touching the GPUs, so a bad corpus path fails in
-# seconds and not after a twenty minute model load.
-jobs = []
-for path in a.corpora:
-    name = os.path.splitext(os.path.basename(path))[0]
-    ids = tok.encode(open(path, encoding="utf-8").read(), add_special_tokens=False)
-    n_avail = len(ids) // body
-    n = min(a.chunks, n_avail)
-    assert n > 0, "%s: fewer than %d tokens" % (path, a.ctx)
-    print("%s: %d tokens, %d windows of %d available, scoring %d" % (name, len(ids), n_avail, a.ctx, n), flush=True)
-    jobs.append((name, path, [[bos] + ids[i * body:(i + 1) * body] for i in range(n)]))
+    # Tokenize everything before touching the GPUs, so a bad corpus path fails in
+    # seconds and not after a twenty minute model load.
+    jobs = []
+    for path in a.corpora:
+        name = os.path.splitext(os.path.basename(path))[0]
+        ids = tok.encode(open(path, encoding="utf-8").read(), add_special_tokens=False)
+        n_avail = len(ids) // body
+        n = min(a.chunks, n_avail)
+        assert n > 0, "%s: fewer than %d tokens" % (path, a.ctx)
+        print("%s: %d tokens, %d windows of %d available, scoring %d" % (name, len(ids), n_avail, a.ctx, n), flush=True)
+        jobs.append((name, path, [[bos] + ids[i * body:(i + 1) * body] for i in range(n)]))
 
-t_load = time.time()
-llm = LLM(model=a.model, tensor_parallel_size=a.tp, max_model_len=a.ctx,
-          max_logprobs=K, gpu_memory_utilization=a.gpu_mem,
-          kv_cache_dtype=a.kv_cache_dtype, enable_prefix_caching=False)
-print("model loaded in %.0f s" % (time.time() - t_load), flush=True)
-sp = SamplingParams(max_tokens=1, temperature=0.0, prompt_logprobs=K, detokenize=False)
+    t_load = time.time()
+    llm = LLM(model=a.model, tensor_parallel_size=a.tp, max_model_len=a.ctx,
+              max_logprobs=K, gpu_memory_utilization=a.gpu_mem,
+              kv_cache_dtype=a.kv_cache_dtype, enable_prefix_caching=False)
+    print("model loaded in %.0f s" % (time.time() - t_load), flush=True)
+    sp = SamplingParams(max_tokens=1, temperature=0.0, prompt_logprobs=K, detokenize=False)
 
-for name, path, windows in jobs:
-    n = len(windows)
-    n_scored = n * (a.ctx - first)
-    top_ids = np.zeros((n_scored, K), dtype=np.int32)
-    top_lps = np.full((n_scored, K), -np.inf, dtype=np.float32)
-    tok_id = np.zeros(n_scored, dtype=np.int32)
-    tok_lp = np.zeros(n_scored, dtype=np.float32)
-    row = 0
-    t0 = time.time()
-    for b in range(0, n, a.batch):
-        batch = windows[b:b + a.batch]
-        outs = llm.generate([{"prompt_token_ids": w} for w in batch], sp, use_tqdm=False)
-        for w, o in zip(batch, outs):
-            pl = o.prompt_logprobs
-            assert pl is not None and len(pl) == len(w), "prompt_logprobs missing or short"
-            for pos in range(first, len(w)):
-                d = pl[pos]
-                actual = w[pos]
-                items = sorted(((lp.logprob, tid) for tid, lp in d.items()), reverse=True)
-                m = min(K, len(items))
-                top_lps[row, :m] = [x[0] for x in items[:m]]
-                top_ids[row, :m] = [x[1] for x in items[:m]]
-                tok_id[row] = actual
-                tok_lp[row] = d[actual].logprob
-                row += 1
-        print("  %s: %d / %d windows, %.0f s" % (name, min(b + a.batch, n), n, time.time() - t0), flush=True)
-    assert row == n_scored, (row, n_scored)
-    out = "%s-%s.npz" % (a.out_prefix, name)
-    meta = {"model": os.path.abspath(a.model), "corpus": os.path.abspath(path), "ctx": a.ctx,
-            "chunks": n, "topk": K, "first_scored": first, "vocab": len(tok), "scored_positions": n_scored}
-    np.savez_compressed(out, top_ids=top_ids, top_lps=top_lps, tok_id=tok_id, tok_lp=tok_lp, meta=json.dumps(meta))
-    mass = np.exp(top_lps).sum(axis=1)
-    print("written %s: %d positions, top-%d mass median %.5f min %.5f, ppl %.4f"
-          % (out, n_scored, K, float(np.median(mass)), float(mass.min()), float(np.exp(-tok_lp.mean()))), flush=True)
+    for name, path, windows in jobs:
+        n = len(windows)
+        n_scored = n * (a.ctx - first)
+        top_ids = np.zeros((n_scored, K), dtype=np.int32)
+        top_lps = np.full((n_scored, K), -np.inf, dtype=np.float32)
+        tok_id = np.zeros(n_scored, dtype=np.int32)
+        tok_lp = np.zeros(n_scored, dtype=np.float32)
+        row = 0
+        t0 = time.time()
+        for b in range(0, n, a.batch):
+            batch = windows[b:b + a.batch]
+            outs = llm.generate([{"prompt_token_ids": w} for w in batch], sp, use_tqdm=False)
+            for w, o in zip(batch, outs):
+                pl = o.prompt_logprobs
+                assert pl is not None and len(pl) == len(w), "prompt_logprobs missing or short"
+                for pos in range(first, len(w)):
+                    d = pl[pos]
+                    actual = w[pos]
+                    items = sorted(((lp.logprob, tid) for tid, lp in d.items()), reverse=True)
+                    m = min(K, len(items))
+                    top_lps[row, :m] = [x[0] for x in items[:m]]
+                    top_ids[row, :m] = [x[1] for x in items[:m]]
+                    tok_id[row] = actual
+                    tok_lp[row] = d[actual].logprob
+                    row += 1
+            print("  %s: %d / %d windows, %.0f s" % (name, min(b + a.batch, n), n, time.time() - t0), flush=True)
+        assert row == n_scored, (row, n_scored)
+        out = "%s-%s.npz" % (a.out_prefix, name)
+        meta = {"model": os.path.abspath(a.model), "corpus": os.path.abspath(path), "ctx": a.ctx,
+                "chunks": n, "topk": K, "first_scored": first, "vocab": len(tok), "scored_positions": n_scored}
+        np.savez_compressed(out, top_ids=top_ids, top_lps=top_lps, tok_id=tok_id, tok_lp=tok_lp, meta=json.dumps(meta))
+        mass = np.exp(top_lps).sum(axis=1)
+        print("written %s: %d positions, top-%d mass median %.5f min %.5f, ppl %.4f"
+              % (out, n_scored, K, float(np.median(mass)), float(mass.min()), float(np.exp(-tok_lp.mean()))), flush=True)
+
+
+if __name__ == "__main__":
+    main()
 LPEOF
 
 cat > "$NVFP4_TOOLS/nvfp4_kld.py" << 'KLDEOF'
