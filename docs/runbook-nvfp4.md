@@ -43,7 +43,7 @@ Three checkpoints, one code path, one variable:
 | --- | --- | --- |
 | `flat` | nothing, 1.0 everywhere. What the two community casts on the hub carry | 0 |
 | `nvidia` | cnn_dailymail + nemotron-post-training-dataset-v2, 64 samples of 512 | about 500 |
-| `atomic` | our calib-corpora build, the model's own chat markup, 512 windows of 4096 | about 33,000 |
+| `atomic` | our calib-corpora build rendered in the model's own chat markup, 512 windows of 4096 | about 33,000 |
 
 Theory, worked through in the chat that produced this route, says the three
 will sit within a few percent of each other on KLD. The input of w1/w3 is
@@ -59,11 +59,11 @@ So the claims to pre-register, in this order, before the first number exists:
    token and got a guessed `input_scale`. This number is guaranteed to separate
    `nvidia` from `atomic`, and it is meaningful: a guessed ceiling is where
    clipping comes from.
-2. **Divergence.** Mean and p99 KLD against the native checkpoint, top-1
-   agreement, perplexity, on `neutral`, `code` and `agentic`. Report all three
-   checkpoints beside the noise floor from `nvfp4_repeat`. If `atomic` is not
-   outside three noise floors of `flat`, say so: that is the finding, and it is
-   consistent with the theory.
+2. **Divergence.** The KL lower bound, top-1 agreement and perplexity against
+   the native checkpoint on `neutral`, `code` and `agentic`, several runs per
+   build, paired per-window differences with intervals that resample windows
+   and runs. If the interval for `atomic − flat` contains zero, say so: that
+   is the finding, and it is consistent with the theory.
 3. **Tails.** `p99_kld` and `max_kld` per corpus. If calibration hurts, it hurts
    here, on the tokens that exceeded the calibrated ceiling.
 
@@ -233,17 +233,24 @@ Uncertainty is a bootstrap over windows, 2048 positions each, with 95 %
 percentile intervals of the per-window mean; positions are not independent,
 windows are treated as such. Two builds measured against the same reference are
 compared with `nvfp4_compare`, the paired per-window difference with its own
-interval. An interval that contains zero means no convincing difference was
+interval. With several runs per build, `aggregate.py` in the metrics dataset
+gives two intervals: windows only, with the run results fixed, and windows
+plus runs, where every draw also resamples each build's runs with replacement.
+The second is the one to quote; with three runs per build it is coarse, and it
+is wider. An interval that contains zero means no convincing difference was
 found, not that the two are equivalent; equivalence would need a tolerance
 chosen before looking at the data, and none was.
 
-`nvfp4_repeat` scores the reference against itself. It is one sample of the
-engine's run-to-run variation, which the window intervals do not contain. On
-this stand it was far from zero: 2–4 % of top-1 tokens flip between two runs
-of the same model. Non-deterministic MoE kernels flipping near-tied experts is
-the working hypothesis, not an established cause; batching, kernel selection
-and the logprob extraction path have not been ruled out, and vLLM's batch
-invariance mode has not been tried on this branch.
+`nvfp4_repeat` scores the reference against itself. On this stand two runs of
+the same model diverge by 0.016 KL and flip 2–4 % of top-1 tokens, while a
+build's mean divergence from the reference is stable to 0.0002–0.0006 across
+runs. Non-deterministic MoE kernels flipping near-tied experts is the working
+hypothesis, not an established cause. A single batch-size-1 run of the
+original diverged from the batch-4 reference about as much as the batch-4
+repeats did, which argues against batching as the source but does not settle
+it: the batch-1 mode's own repeatability was not measured, and the logprob
+extraction path was not tested separately. vLLM's batch invariance mode has
+not been tried on this branch.
 
 ## How long the stand takes
 
@@ -304,48 +311,65 @@ batch size 1, each a fresh engine start. Reference perplexity 2.9685 neutral,
 Paired per-window differences, per-window means averaged over runs first,
 A − B with 95 % window bootstrap:
 
+Intervals resample windows and, independently per build, runs (the reference
+is fixed); the windows-only intervals are in `logs/aggregate.txt`.
+
 | corpus | nvidia − flat, KL | nvidia − flat, top-1 | flat − original, KL | flat − original, top-1 | batch 1 − original, KL |
 | --- | --- | --- | --- | --- | --- |
-| neutral | +0.0009 [+0.0004, +0.0014] | −0.19 pt [−0.34, −0.05] | +0.0186 [+0.0160, +0.0216] | −1.84 pt [−2.05, −1.64] | +0.0008 [+0.0004, +0.0012] |
-| code | +0.0007 [+0.0002, +0.0011] | −0.12 pt [−0.22, −0.03] | +0.0092 [+0.0062, +0.0123] | −0.92 pt [−1.28, −0.59] | +0.0009 [+0.0003, +0.0014] |
-| agentic | +0.0003 [−0.0000, +0.0007] | −0.02 pt [−0.10, +0.05] | +0.0032 [+0.0026, +0.0039] | −0.30 pt [−0.37, −0.23] | +0.0005 [−0.0000, +0.0010] |
+| neutral | +0.0009 [+0.0001, +0.0019] | −0.19 pt [−0.41, +0.03] | +0.0186 [+0.0159, +0.0217] | −1.84 pt [−2.11, −1.59] | +0.0008 [+0.0004, +0.0012] |
+| code | +0.0007 [−0.0002, +0.0015] | −0.12 pt [−0.29, +0.04] | +0.0092 [+0.0061, +0.0125] | −0.92 pt [−1.29, −0.58] | +0.0009 [+0.0003, +0.0015] |
+| agentic | +0.0003 [−0.0001, +0.0008] | −0.02 pt [−0.13, +0.09] | +0.0032 [+0.0025, +0.0040] | −0.30 pt [−0.40, −0.20] | +0.0005 [−0.0001, +0.0011] |
 
 The pre-registered reading, in order:
 
 1. **Coverage.** 15,246 of 15,360 routed experts calibrated (99.3 %); 342
-   expert projections took the per-layer fallback scale. All 16,986,931,200
+   expert projections took the fallback scale, the maximum over all
+   calibrated experts of the same projection across layers. All 16,986,931,200
    expert blocks had scales inside the exactly representable window, which is
    what the exporter's `cast_blocks_lossless` counts; on top of that, 12
    experts × 3 projections (0.42 G parameters) were dequantized from the source
    and from the export and compared element by element: identical, worst
    difference 0.0. The packed bytes differ in 11 % of positions, every one of
-   them a −0 nibble the export normalized to +0.
-2. **Divergence.** The calibration does not help this model and on text and
-   code it costs a little: `nvidia` sits 0.0009 KL and 0.19 points of top-1
-   behind `flat` on neutral, intervals excluding zero, per-run means agreeing to
-   the fourth decimal; the same on code; nothing on agentic. That is 5–7 % of
-   the whole NVFP4-path cost, and it is the direction the theory section
-   predicted: a per-expert ceiling set from a few hundred tokens can only clip
-   what it did not see, while the flat window already fits the clamped
-   activations. The NVFP4 path as a whole, native MXFP4×MXFP8 kernels against
-   the FlashInfer TRT-LLM NVFP4 path, costs 1.8 points of top-1 and +0.7 to
-   +0.9 % perplexity on neutral, half that on code, a tenth on agentic,
-   separated from the original's own spread on every corpus.
+   them a −0 nibble the export normalized to +0. Script and report:
+   `logs/cast-check.py`, `logs/cast-check.txt` in the metrics dataset.
+2. **Divergence.** The calibration showed no convincing advantage in this
+   experiment. The point estimates lean the other way, `nvidia` 0.0009 KL and
+   0.19 points of top-1 behind `flat` on neutral, but once run variation is
+   in the interval only the neutral KL difference stays clear of zero, and by
+   a hair; top-1 on every corpus and KL on code and agentic do not. Code
+   perplexity is even marginally lower for `nvidia` (1.8991 against 1.8995).
+   The defensible statement is: no measurable benefit from the calibration on
+   this model, and a slight lean toward the plain cast that three runs cannot
+   confirm. A mechanism consistent with that lean is the one the theory
+   section names, a per-expert ceiling from a few hundred tokens clipping what
+   it did not see, but it is a hypothesis: no clipping was observed, and a
+   changed scale also moves the rounding of every value, so nothing here shows
+   `input_scale = 1.0` to be optimal. What is clearly separated from the
+   original's own spread on every corpus is the cost of the NVFP4 W4A4 path as
+   a whole, native MXFP4×MXFP8 kernels against the FlashInfer TRT-LLM NVFP4
+   path: 1.8 points of top-1 and +0.7 to +0.9 % perplexity on neutral, half
+   that on code, a tenth on agentic.
 3. **Tails.** p99 and max move within what the repeats show; no
    calibration-induced clipping is visible at this resolution.
 
 On the noise: two runs of the original diverge by 0.016 KL and disagree on
 4 % of top-1 tokens, but a build's mean divergence from the reference is
 stable to 0.0002–0.0006 across runs, so the mean is a usable statistic after
-all; batch size 1 leaves the spread in place (0.0168 against 0.0159 for the
-batch-4 repeats), so batching is not its source. Non-deterministic MoE kernels
-flipping near-tied experts remains the working hypothesis.
+all. One batch-size-1 run left the spread in place (0.0168 against 0.0159 for
+the batch-4 repeats), which argues against batching as the source without
+settling it. Non-deterministic MoE kernels flipping near-tied experts remains
+the working hypothesis.
 
-The `agentic` corpus is teacher-forced text in the model's markup, scored one
-token at a time; it says nothing about tool calls or long free trajectories.
-The eval corpora are disjoint from every calib-corpora build by construction,
-and the `nvidia` calibration used NVIDIA's datasets, so no measurement text
-was seen in calibration. Speed was not measured.
+The `agentic` corpus is agentic dialogue rendered in Muse Glimmer's markup
+(`<|start|>`, `atem:function_calls`), not DeepSeek's DSML: V4.1's tokenizer
+sees it as plain text with unfamiliar control strings. That is fine for
+comparing builds on identical input and wrong to call "the model's own
+markup". All three corpora are teacher-forced, scored one token at a time, and
+say nothing about tool calls or long free trajectories. Their hashes as used
+are in `logs/corpora-sha256.txt` of the metrics dataset. The eval corpora are
+disjoint from every calib-corpora build by construction; overlap with the
+CNN/DailyMail and Nemotron samples NVIDIA's recipe calibrates on was not
+checked. Speed was not measured.
 
 Timings that matter for the next run: reshard 2.5 min (the NVMe did 50 GB/s),
 calibration 10 min of forwards plus compile, export 7 min per checkpoint, vLLM
@@ -358,7 +382,8 @@ already on the Hub, only the scales travel.
 
 ## What is not verified
 
-Nothing on this page has run end to end. In particular:
+The calibration box and the stand ran end to end once, on one 4×B200 box.
+What has not:
 
 - The patched `ptq.py` ran once on V4.1 on B200 with the 4-way reshard; other
   MP counts and Hopper have not been tried.

@@ -88,11 +88,10 @@ NVFP4_CALIB_SEQ=${NVFP4_CALIB_SEQ:-4096}
 NVFP4_CALIB_SIZE=${NVFP4_CALIB_SIZE:-512}        # windows for the atomic run
 NVFP4_CALIB_BATCH=${NVFP4_CALIB_BATCH:-2}
 
-# Measurement protocol. Same as the published GGUF and MLX tables so the
-# numbers can sit side by side: chunks of 4096, only the second half of each
-# chunk scored, reference first in the divergence. One difference that must be
-# printed beside every number: vLLM returns top-K log probabilities, not the
-# whole vocabulary, so the KLD here is a bracket, see nvfp4_kld.py.
+# Measurement protocol. The window layout follows the GGUF and MLX tables,
+# chunks of 4096 with only the second half scored, but the numbers are not
+# comparable with those tables: a different engine, a different reference, and
+# a KL that is a lower bound from top-K log probabilities, see nvfp4_kld.py.
 NVFP4_CTX=${NVFP4_CTX:-4096}
 NVFP4_CHUNKS=${NVFP4_CHUNKS:-24}
 NVFP4_TOPK=${NVFP4_TOPK:-512}
