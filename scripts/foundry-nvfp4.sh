@@ -907,7 +907,9 @@ def main():
         jobs.append((name, path, [[bos] + ids[i * body:(i + 1) * body] for i in range(n)]))
 
     t_load = time.time()
-    llm = LLM(model=a.model, tensor_parallel_size=a.tp, max_model_len=a.ctx,
+    # ctx + 1: vLLM validates prompt length plus the one output token that
+    # prompt_logprobs needs against max_model_len, and rejects an exact fit.
+    llm = LLM(model=a.model, tensor_parallel_size=a.tp, max_model_len=a.ctx + 1,
               max_logprobs=K, gpu_memory_utilization=a.gpu_mem,
               kv_cache_dtype=a.kv_cache_dtype, enable_prefix_caching=False)
     print("model loaded in %.0f s" % (time.time() - t_load), flush=True)
