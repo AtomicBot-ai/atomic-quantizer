@@ -648,7 +648,8 @@ nvfp4_push() {
     hf repo create "$repo" --type model 2>/dev/null || true
     hf upload-large-folder "$repo" "$dir" --repo-type model --num-workers 8 || return 1
     hf repo create "$NVFP4_METRICS" --type dataset 2>/dev/null || true
-    local f; for f in "$NVFP4_LOGS"/*-"$name".*; do
+    # the per-corpus kld files are named kld-NAME-CORPUS.*, the rest NAME.*
+    local f; for f in "$NVFP4_LOGS"/*-"$name".* "$NVFP4_LOGS"/*-"$name"-*.* "$NVFP4_LOGS"/table.txt; do
         [ -f "$f" ] && nvfp4_upload "$f" "logs/$(basename "$f")"
     done
 }
