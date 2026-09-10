@@ -1,6 +1,6 @@
 # The files in the root
 
-Four files, all at the repository root. Nothing here is a program to run: they
+Five files, all at the repository root. Nothing here is a program to run: they
 are toolboxes to work from.
 
 ```bash
@@ -55,6 +55,28 @@ day to find. They are explained in the file's own comments and in
 | `MLX_USE_CUDA_GRAPHS`       | 0     | a compiled graph remembers buffer addresses the allocator later reuses. Turning capture off removes a whole class of failures for about two seconds a step |
 | `MLX_CUDA_GRAPH_CACHE_SIZE` | 2048  | 1 aborts with cache thrashing, 6144 runs out of memory                                                                                                     |
 | `MLX3_SEQ`                  | 512   | collapses the long tail of tensor shapes into one, which is what makes memory flat rather than climbing                                                    |
+
+## `foundry-nvfp4.sh`
+
+The NVFP4 side, written for DeepSeek-V4.1-Flash and nothing else yet. Self
+contained: it does not source `foundry.sh` and never builds llama.cpp.
+
+It is a different shape of work from the other two files, because the model
+already ships its experts in MXFP4 and NVFP4 is a lossless re-encoding of them.
+What NVIDIA's recipe adds is one calibrated scalar per expert projection, and
+that scalar is only consumed on Blackwell. The file therefore describes two
+boxes, a calibration box that runs DeepSeek's reference model under modelopt,
+and a Blackwell measurement box that runs the vLLM branch which knows
+`deepseek_v41`. `nvfp4_box calib` and `nvfp4_box stand` print the command list
+for each. [runbook-nvfp4.md](../docs/runbook-nvfp4.md) explains why the
+measurement has to be on Blackwell and what the table can honestly claim.
+
+Like `foundry-mlx3.sh` it writes its python helpers to disk with
+`nvfp4_write_py`, under `/tools`: a patcher for modelopt's `ptq.py`, the corpus
+windower, the flat-amax generator that stands in for "no calibration", the
+coverage counter, the vLLM logprob dump and the KLD bracket. Two pins live at
+the top of the file and matter: the modelopt commit the patcher was written
+against, and the sha of the vLLM branch, which is force pushed upstream.
 
 ## `auto_fmt.py`
 

@@ -12,6 +12,7 @@ when something is missing.
 | --- | --- |
 | `foundry.sh` | the GGUF side. Box setup, llama.cpp build, corpus, imatrix, quantize ladder, KLD, uploads |
 | `foundry-mlx3.sh` | the MLX side. Self contained, does not need `foundry.sh` |
+| `foundry-nvfp4.sh` | the NVFP4 side, DeepSeek-V4.1-Flash only. Calibration by NVIDIA's recipe on one box, measurement on a Blackwell box. See [docs/runbook-nvfp4.md](docs/runbook-nvfp4.md) |
 | `auto_fmt.py` | generic chat renderer. The canonical copy lives in `calib-corpora/tools/` |
 
 Details on each file: [docs/scripts.md](docs/scripts.md).
