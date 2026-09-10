@@ -27,8 +27,9 @@
 #
 #   calib box   8xH200 or 8xB200. Runs DeepSeek's reference model.py under
 #               modelopt to collect input amax, then exports the checkpoint.
-#   stand box   8xB200. Runs the vLLM branch that knows deepseek_v41 and
-#               measures. A stand on Hopper measures nothing about the recipe.
+#   stand box   Blackwell: 8xB200, 8xB300 or 8xRTX PRO 6000. Runs the vLLM branch
+#               that knows deepseek_v41 and measures. A stand on Hopper measures
+#               nothing about the recipe.
 #
 # Three checkpoints get measured against one reference, the native MXFP4
 # checkpoint served by the same vLLM build on the same GPUs:
@@ -90,7 +91,9 @@ NVFP4_CALIB_BATCH=${NVFP4_CALIB_BATCH:-2}
 NVFP4_CTX=${NVFP4_CTX:-4096}
 NVFP4_CHUNKS=${NVFP4_CHUNKS:-24}
 NVFP4_TOPK=${NVFP4_TOPK:-512}
-NVFP4_CORPUS=${NVFP4_CORPUS:-$NVFP4_EVAL/neutral.txt}
+# Every corpus in this list is scored by one model load. Loading V4.1 into
+# vLLM is the slow step on the stand, so the corpora are never looped outside.
+NVFP4_CORPORA=${NVFP4_CORPORA:-neutral code agentic}
 
 export HF_HOME=${HF_HOME:-$NVFP4_HF}
 export HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-1}
@@ -170,7 +173,7 @@ nvfp4_push flat ; nvfp4_push nvidia ; nvfp4_push atomic
 EOF
     ;;
     stand) cat << EOF
-# stand box: 8xB200, 2 TB NVMe, host RAM >= 300 GB (Engram tables live in pinned host memory)
+# stand box: Blackwell, 8xB200 / 8xB300 / 8xRTX PRO 6000, 2 TB NVMe, host RAM >= 300 GB (Engram tables live in pinned host memory)
 nvfp4_setup
 nvfp4_persist
 nvfp4_get src
@@ -201,7 +204,9 @@ nvfp4_check() {
     [ -f "$NVFP4_EVAL/calib.jsonl" ] && echo "  [x] calib jsonl" || echo "  [ ] calib jsonl -> nvfp4_calib_jsonl"
     local d; for d in "$NVFP4_AMAX"/*/; do [ -d "$d" ] && echo "  [x] amax       $(basename "$d")"; done
     for d in "$NVFP4_OUT"/*/; do [ -f "$d/config.json" ] && echo "  [x] export     $(basename "$d")"; done
-    [ -f "$NVFP4_CORPUS" ] && echo "  [x] eval       $NVFP4_CORPUS" || echo "  [ ] eval       -> nvfp4_get eval"
+    local c; for c in $(echo $NVFP4_CORPORA); do
+        [ -f "$NVFP4_EVAL/$c.txt" ] && echo "  [x] eval       $c" || echo "  [ ] eval       $c -> nvfp4_get eval"
+    done
     ls "$NVFP4_LOGS"/lp-*.npz 2>/dev/null | sed 's/^/  [x] logprobs   /'
     ls "$NVFP4_LOGS"/kld-*.json 2>/dev/null | sed 's/^/  [x] kld        /'
 }
@@ -333,7 +338,7 @@ nvfp4_calib() {
         --output_path "$out" \
         --batch_size "$NVFP4_CALIB_BATCH" \
         --calib_size "$size" --calib_seq "$seq" \
-        --calib_dataset $ds \
+        --calib_dataset $(echo $ds) \
         2>&1 | tee "$NVFP4_LOGS/calib-$name.log"
     date
     ls -la "$out"
@@ -420,21 +425,28 @@ EOF
 }
 
 # nvfp4_ref / nvfp4_score DIR NAME
-# One vLLM offline run over NVFP4_CHUNKS windows of NVFP4_CTX tokens from
-# NVFP4_CORPUS. Every window starts with BOS, the second half is scored, top-K
-# log probabilities and the scored token's own log probability are written to
-# $NVFP4_LOGS/lp-NAME.npz. No speculative decoding, no Engram offload tricks,
-# no chat template: raw token ids go in, so the deepseek_v41 tokenizer mode is
-# never exercised.
+# One vLLM offline run, one model load, every corpus in NVFP4_CORPORA: for
+# each, NVFP4_CHUNKS windows of NVFP4_CTX tokens. Every window starts with BOS,
+# the second half is scored, top-K log probabilities and the scored token's own
+# log probability are written to $NVFP4_LOGS/lp-NAME-CORPUS.npz. No speculative
+# decoding, no chat template: raw token ids go in, so the deepseek_v41
+# tokenizer mode is never exercised.
 nvfp4_score() {
-    local dir="${1:-}" name="${2:-}"
+    local dir="${1:-}" name="${2:-}" c files=""
     [ -f "$dir/config.json" ] && [ -n "$name" ] || { echo "nvfp4_score /path/to/checkpoint NAME"; return 1; }
-    [ -f "$NVFP4_CORPUS" ] || { echo "no corpus at $NVFP4_CORPUS. Run:  nvfp4_get eval"; return 1; }
+    for c in $(echo $NVFP4_CORPORA); do
+        [ -f "$NVFP4_EVAL/$c.txt" ] || { echo "no corpus $NVFP4_EVAL/$c.txt. Run:  nvfp4_get eval"; return 1; }
+        files="$files $NVFP4_EVAL/$c.txt"
+    done
     nvfp4_write_py > /dev/null
-    local out="$NVFP4_LOGS/lp-$name.npz"
-    if [ -f "$out" ] && [ "${NVFP4_FORCE:-0}" != "1" ]; then echo "already here: $out"; return 0; fi
+    local have=1
+    for c in $(echo $NVFP4_CORPORA); do [ -f "$NVFP4_LOGS/lp-$name-$c.npz" ] || have=0; done
+    if [ "$have" = 1 ] && [ "${NVFP4_FORCE:-0}" != "1" ]; then
+        echo "already here:"; ls "$NVFP4_LOGS"/lp-"$name"-*.npz; return 0
+    fi
     date
-    python3 "$NVFP4_TOOLS/nvfp4_logprobs.py" "$dir" "$NVFP4_CORPUS" "$out" \
+    python3 "$NVFP4_TOOLS/nvfp4_logprobs.py" "$dir" "$NVFP4_LOGS/lp-$name" \
+        --corpora $(echo $files) \
         --tp "$NVFP4_TP" --ctx "$NVFP4_CTX" --chunks "$NVFP4_CHUNKS" --topk "$NVFP4_TOPK" \
         2>&1 | tee "$NVFP4_LOGS/lp-$name.log"
     date
@@ -451,51 +463,62 @@ nvfp4_repeat() {
 }
 
 nvfp4_kld() {
-    local name="${1:-}"
-    [ -f "$NVFP4_LOGS/lp-$name.npz" ] || { echo "nvfp4_kld NAME   (measured: $(ls "$NVFP4_LOGS"/lp-*.npz 2>/dev/null | xargs -n1 basename | sed 's/lp-//;s/.npz//' | tr '\n' ' '))"; return 1; }
-    [ -f "$NVFP4_LOGS/lp-ref.npz" ] || { echo "no reference. Run:  nvfp4_ref"; return 1; }
+    local name="${1:-}" c
+    [ -n "$name" ] || { echo "nvfp4_kld NAME   (scored: $(ls "$NVFP4_LOGS"/lp-*.log 2>/dev/null | xargs -n1 basename | sed 's/lp-//;s/.log//' | tr '\n' ' '))"; return 1; }
     nvfp4_write_py > /dev/null
-    python3 "$NVFP4_TOOLS/nvfp4_kld.py" "$NVFP4_LOGS/lp-ref.npz" "$NVFP4_LOGS/lp-$name.npz" \
-        "$NVFP4_LOGS/kld-$name.json" 2>&1 | tee "$NVFP4_LOGS/kld-$name.log"
-    nvfp4_upload "$NVFP4_LOGS/kld-$name.json" "logs/kld-$name.json"
-    nvfp4_upload "$NVFP4_LOGS/kld-$name.log" "logs/kld-$name.log"
+    for c in $(echo $NVFP4_CORPORA); do
+        [ -f "$NVFP4_LOGS/lp-$name-$c.npz" ] || { echo "no $NVFP4_LOGS/lp-$name-$c.npz. Run:  nvfp4_score DIR $name"; return 1; }
+        [ -f "$NVFP4_LOGS/lp-ref-$c.npz" ] || { echo "no reference for $c. Run:  nvfp4_ref"; return 1; }
+        echo "--- $name on $c ---"
+        python3 "$NVFP4_TOOLS/nvfp4_kld.py" "$NVFP4_LOGS/lp-ref-$c.npz" "$NVFP4_LOGS/lp-$name-$c.npz" \
+            "$NVFP4_LOGS/kld-$name-$c.json" 2>&1 | tee "$NVFP4_LOGS/kld-$name-$c.log"
+        nvfp4_upload "$NVFP4_LOGS/kld-$name-$c.json" "logs/kld-$name-$c.json"
+        nvfp4_upload "$NVFP4_LOGS/kld-$name-$c.log" "logs/kld-$name-$c.log"
+    done
 }
 
 nvfp4_table() {
-    python3 - "$NVFP4_LOGS" "$NVFP4_OUT" << 'TBLEOF'
+    python3 - "$NVFP4_LOGS" "$NVFP4_CORPORA" << 'TBLEOF'
 import glob, json, os, sys
-log, outdir = sys.argv[1], sys.argv[2]
-rows = []
+log, corpora = sys.argv[1], sys.argv[2].split()
+rows = {}
 for p in sorted(glob.glob(os.path.join(log, "kld-*.json"))):
     try:
         r = json.load(open(p))
     except Exception:
         continue
-    r["name"] = os.path.basename(p)[4:-5]
-    rows.append(r)
+    stem = os.path.basename(p)[4:-5]
+    for c in corpora:
+        if stem.endswith("-" + c):
+            r["name"] = stem[: -len(c) - 1]
+            rows.setdefault(c, []).append(r)
 if not rows:
     print("nothing measured on this box yet"); sys.exit(0)
+topk = None
+for c in corpora:
+    if c not in rows:
+        continue
+    print()
+    print("corpus: %s" % c)
+    print("%-22s %10s %10s %10s %9s %9s %9s" % ("build", "KLD low", "KLD high", "median", "p99", "top-1 %", "ppl"))
+    for r in rows[c]:
+        topk = r["topk"]
+        print("%-22s %10.6f %10.6f %10.6f %9.5f %9.2f %9.4f" % (
+            r["name"], r["mean_kld_low"], r["mean_kld_high"], r["median_kld"],
+            r["p99_kld"], r["top1_agree_pct"], r["quant_ppl"]))
+    rep = [r for r in rows[c] if r["name"] == "ref-repeat"]
+    if rep:
+        print("noise floor: reference against itself, KLD low %.6f, top-1 %.2f %%. Three times it is the"
+              % (rep[0]["mean_kld_low"], rep[0]["top1_agree_pct"]))
+        print("smallest defensible gap on this corpus.")
+    else:
+        print("noise floor not measured on this corpus yet: nvfp4_repeat")
 print()
-print("%-22s %10s %10s %10s %9s %9s %9s" % ("build", "KLD low", "KLD high", "median", "p99", "top-1 %", "ppl"))
-for r in rows:
-    print("%-22s %10.6f %10.6f %10.6f %9.5f %9.2f %9.4f" % (
-        r["name"], r["mean_kld_low"], r["mean_kld_high"], r["median_kld"],
-        r["p99_kld"], r["top1_agree_pct"], r["quant_ppl"]))
-print()
-print("KLD is reference || candidate over the reference's top-%d tokens plus a rest bucket." % rows[0]["topk"])
+print("KLD is reference || candidate over the reference's top-%d tokens plus a rest bucket." % topk)
 print("low  puts every reference token the candidate did not rank at the candidate's K-th probability,")
 print("high spreads the candidate's leftover mass uniformly over the rest of the vocabulary.")
 print("The truth is between the two. If they disagree by more than the gap you are trying to show,")
 print("raise NVFP4_TOPK and measure again; the exact columns are top-1 and ppl.")
-rep = [r for r in rows if r["name"] == "ref-repeat"]
-if rep:
-    print()
-    print("noise floor on this box: reference against itself, KLD low %.6f, top-1 %.2f %%. Treat about"
-          % (rep[0]["mean_kld_low"], rep[0]["top1_agree_pct"]))
-    print("three times it as the smallest defensible gap and print it beside every number.")
-else:
-    print()
-    print("noise floor not measured on this box yet: nvfp4_repeat")
 cov = sorted(glob.glob(os.path.join(log, "coverage-*.json")))
 if cov:
     print()
@@ -735,11 +758,15 @@ print("written to %s" % out)
 COVEOF
 
 cat > "$NVFP4_TOOLS/nvfp4_logprobs.py" << 'LPEOF'
-"""Top-K log probabilities over the measurement corpus, from vLLM offline.
+"""Top-K log probabilities over the measurement corpora, from vLLM offline.
 
-    python3 nvfp4_logprobs.py MODEL_DIR CORPUS OUT.npz --tp 8 --ctx 4096 --chunks 24 --topk 512
+    python3 nvfp4_logprobs.py MODEL_DIR OUT_PREFIX --corpora a.txt b.txt --tp 8 --ctx 4096 --chunks 24 --topk 512
 
-Protocol, matching the GGUF and MLX tables: the corpus is tokenized once with
+One model load, every corpus, one file per corpus: OUT_PREFIX-<corpus>.npz
+where <corpus> is the file name without extension. Loading V4.1 is minutes,
+scoring a corpus is seconds, so the corpora are never looped outside.
+
+Protocol, matching the GGUF and MLX tables: each corpus is tokenized once with
 the model's tokenizer, cut into windows of ctx tokens whose first token is BOS,
 and only the second half of every window is scored. For every scored position
 the file keeps the top-K token ids and their log probabilities, plus the id and
@@ -757,7 +784,8 @@ import argparse, json, os, sys, time
 import numpy as np
 
 ap = argparse.ArgumentParser()
-ap.add_argument("model"); ap.add_argument("corpus"); ap.add_argument("out")
+ap.add_argument("model"); ap.add_argument("out_prefix")
+ap.add_argument("--corpora", nargs="+", required=True)
 ap.add_argument("--tp", type=int, default=8)
 ap.add_argument("--ctx", type=int, default=4096)
 ap.add_argument("--chunks", type=int, default=24)
@@ -773,53 +801,63 @@ from vllm import LLM, SamplingParams
 tok = AutoTokenizer.from_pretrained(a.model)
 bos = tok.bos_token_id
 assert bos is not None, "tokenizer has no BOS id"
-text = open(a.corpus, encoding="utf-8").read()
-ids = tok.encode(text, add_special_tokens=False)
 body = a.ctx - 1
-n_avail = len(ids) // body
-n = min(a.chunks, n_avail)
-print("corpus %d tokens, %d windows of %d available, scoring %d" % (len(ids), n_avail, a.ctx, n), flush=True)
-windows = [[bos] + ids[i * body:(i + 1) * body] for i in range(n)]
 first = a.ctx // 2  # first scored position inside a window
-
-llm = LLM(model=a.model, tensor_parallel_size=a.tp, max_model_len=a.ctx,
-          max_logprobs=a.topk, gpu_memory_utilization=a.gpu_mem,
-          kv_cache_dtype=a.kv_cache_dtype, enable_prefix_caching=False)
-sp = SamplingParams(max_tokens=1, temperature=0.0, prompt_logprobs=a.topk, detokenize=False)
-
 K = a.topk
-n_scored = n * (a.ctx - first)
-top_ids = np.zeros((n_scored, K), dtype=np.int32)
-top_lps = np.full((n_scored, K), -np.inf, dtype=np.float32)
-tok_id = np.zeros(n_scored, dtype=np.int32)
-tok_lp = np.zeros(n_scored, dtype=np.float32)
-row = 0
-t0 = time.time()
-for b in range(0, n, a.batch):
-    batch = windows[b:b + a.batch]
-    outs = llm.generate([{"prompt_token_ids": w} for w in batch], sp, use_tqdm=False)
-    for w, o in zip(batch, outs):
-        pl = o.prompt_logprobs
-        assert pl is not None and len(pl) == len(w), "prompt_logprobs missing or short"
-        for pos in range(first, len(w)):
-            d = pl[pos]
-            actual = w[pos]
-            items = sorted(((lp.logprob, tid) for tid, lp in d.items()), reverse=True)
-            m = min(K, len(items))
-            top_lps[row, :m] = [x[0] for x in items[:m]]
-            top_ids[row, :m] = [x[1] for x in items[:m]]
-            tok_id[row] = actual
-            tok_lp[row] = d[actual].logprob
-            row += 1
-    print("  %d / %d windows, %.0f s" % (min(b + a.batch, n), n, time.time() - t0), flush=True)
-assert row == n_scored, (row, n_scored)
 
-meta = {"model": os.path.abspath(a.model), "corpus": os.path.abspath(a.corpus), "ctx": a.ctx,
-        "chunks": n, "topk": K, "first_scored": first, "vocab": len(tok), "scored_positions": n_scored}
-np.savez_compressed(a.out, top_ids=top_ids, top_lps=top_lps, tok_id=tok_id, tok_lp=tok_lp, meta=json.dumps(meta))
-mass = np.exp(top_lps).sum(axis=1)
-print("written %s: %d positions, top-%d mass median %.5f min %.5f, ppl %.4f"
-      % (a.out, n_scored, K, float(np.median(mass)), float(mass.min()), float(np.exp(-tok_lp.mean()))))
+# Tokenize everything before touching the GPUs, so a bad corpus path fails in
+# seconds and not after a twenty minute model load.
+jobs = []
+for path in a.corpora:
+    name = os.path.splitext(os.path.basename(path))[0]
+    ids = tok.encode(open(path, encoding="utf-8").read(), add_special_tokens=False)
+    n_avail = len(ids) // body
+    n = min(a.chunks, n_avail)
+    assert n > 0, "%s: fewer than %d tokens" % (path, a.ctx)
+    print("%s: %d tokens, %d windows of %d available, scoring %d" % (name, len(ids), n_avail, a.ctx, n), flush=True)
+    jobs.append((name, path, [[bos] + ids[i * body:(i + 1) * body] for i in range(n)]))
+
+t_load = time.time()
+llm = LLM(model=a.model, tensor_parallel_size=a.tp, max_model_len=a.ctx,
+          max_logprobs=K, gpu_memory_utilization=a.gpu_mem,
+          kv_cache_dtype=a.kv_cache_dtype, enable_prefix_caching=False)
+print("model loaded in %.0f s" % (time.time() - t_load), flush=True)
+sp = SamplingParams(max_tokens=1, temperature=0.0, prompt_logprobs=K, detokenize=False)
+
+for name, path, windows in jobs:
+    n = len(windows)
+    n_scored = n * (a.ctx - first)
+    top_ids = np.zeros((n_scored, K), dtype=np.int32)
+    top_lps = np.full((n_scored, K), -np.inf, dtype=np.float32)
+    tok_id = np.zeros(n_scored, dtype=np.int32)
+    tok_lp = np.zeros(n_scored, dtype=np.float32)
+    row = 0
+    t0 = time.time()
+    for b in range(0, n, a.batch):
+        batch = windows[b:b + a.batch]
+        outs = llm.generate([{"prompt_token_ids": w} for w in batch], sp, use_tqdm=False)
+        for w, o in zip(batch, outs):
+            pl = o.prompt_logprobs
+            assert pl is not None and len(pl) == len(w), "prompt_logprobs missing or short"
+            for pos in range(first, len(w)):
+                d = pl[pos]
+                actual = w[pos]
+                items = sorted(((lp.logprob, tid) for tid, lp in d.items()), reverse=True)
+                m = min(K, len(items))
+                top_lps[row, :m] = [x[0] for x in items[:m]]
+                top_ids[row, :m] = [x[1] for x in items[:m]]
+                tok_id[row] = actual
+                tok_lp[row] = d[actual].logprob
+                row += 1
+        print("  %s: %d / %d windows, %.0f s" % (name, min(b + a.batch, n), n, time.time() - t0), flush=True)
+    assert row == n_scored, (row, n_scored)
+    out = "%s-%s.npz" % (a.out_prefix, name)
+    meta = {"model": os.path.abspath(a.model), "corpus": os.path.abspath(path), "ctx": a.ctx,
+            "chunks": n, "topk": K, "first_scored": first, "vocab": len(tok), "scored_positions": n_scored}
+    np.savez_compressed(out, top_ids=top_ids, top_lps=top_lps, tok_id=tok_id, tok_lp=tok_lp, meta=json.dumps(meta))
+    mass = np.exp(top_lps).sum(axis=1)
+    print("written %s: %d positions, top-%d mass median %.5f min %.5f, ppl %.4f"
+          % (out, n_scored, K, float(np.median(mass)), float(mass.min()), float(np.exp(-tok_lp.mean()))), flush=True)
 LPEOF
 
 cat > "$NVFP4_TOOLS/nvfp4_kld.py" << 'KLDEOF'

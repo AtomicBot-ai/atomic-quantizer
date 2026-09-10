@@ -72,7 +72,16 @@ Never publish a table from a Hopper stand, and never a throughput column.
 | box | GPUs | RAM | disk | does |
 | --- | --- | --- | --- | --- |
 | calib | 8×H200 or 8×B200 | 600 GB | 1.5 TB NVMe | reshard, three calibrations, three exports, push |
-| stand | 8×B200 | 300 GB | 2 TB NVMe | vLLM branch build, reference, three measurements |
+| stand | any Blackwell that holds ~290 GiB of weights: 8×B200, 8×B300, or 8×RTX PRO 6000 (96 GB) | 300 GB | 2 TB NVMe | vLLM branch build, reference, three measurements |
+
+Which Blackwell matters less than that it is Blackwell. vLLM's NVFP4 W4A4
+MoE kernels that consume `input_scale` are gated on compute capability: the
+FlashInfer TRT-LLM and CuTe DSL backends on the 10.x family (B200, B300,
+GB200, GB300), FlashInfer CUTLASS and vLLM's own CUTLASS on 10.x and 12.0
+(RTX PRO 6000 Blackwell). Hopper gets Marlin, which runs W4A16 and drops the
+activation scales. RTX PRO 6000 is the cheapest stand and the least travelled
+path; print the GPU and the selected backend beside every number, because the
+activation quantization is implemented separately in each backend.
 
 RAM on the calib box is set by DeepSeek's `convert.py`, which holds every
 shard of every rank in memory before writing. RAM on the stand is set by the
@@ -169,8 +178,9 @@ nvfp4_kld flat ; nvfp4_kld nvidia ; nvfp4_kld atomic
 nvfp4_table
 ```
 
-Then again with `NVFP4_CORPUS=/host/eval/code.txt` and `agentic.txt`, into a
-different `NVFP4_LOGS`.
+One `nvfp4_score` is one model load and every corpus in `NVFP4_CORPORA`,
+`neutral code agentic` by default, so the table comes out per corpus from five
+loads, not fifteen. Loading is the slow step on this stand, scoring is not.
 
 Run every measurement without `--speculative-config`. The export leaves the
 DSpark draft experts in MXFP4 while `moe_quant_algo` is a global switch, and
@@ -196,6 +206,33 @@ perplexity need no bracket and are exact.
 `nvfp4_repeat` scores the reference against itself. On a deterministic engine
 it is zero; on vLLM with batching it may not be, and whatever it is, three
 times it is the smallest gap the table may call a difference.
+
+## How long the stand takes
+
+Wall clock on 8×B200, everything going right, with the downloads and the
+build overlapped:
+
+| step | hours | notes |
+| --- | --- | --- |
+| image pull, vLLM build from the branch | 1 | csrc changed, no precompiled wheel |
+| four checkpoints in, 475 GiB each | 2–3 | overlaps the build; the calib box's upload was the slow half |
+| five model loads | 1.5–2.5 | ref, ref-repeat, flat, nvidia, atomic; 15–30 min each, the first one longest while compile caches fill |
+| scoring, three corpora per load | 0.5 | seconds of prefill, minutes of Python turning 50 million log probabilities into arrays |
+| KLD and table | 0.25 | |
+| total | 4–6 | |
+
+The number that decides the bill is the model load, and it is the least
+predictable: the Engram tables go to pinned host memory, the NVFP4 experts get
+repacked at load, and nobody has loaded this combination before. Budget a
+day of B200 time and expect to use half of it. A 4×B200 stand also fits, at
+`NVFP4_TP=4`, with the Engram tables off the GPUs; the loads take the same
+time, the hour costs half.
+
+The cheap risk reducer before renting Blackwell: on the calibration box, once
+the exports are done, build the same branch and run `nvfp4_ref` and
+`nvfp4_score ... flat`. That is about two hours of H200 and it settles whether
+the NVFP4 checkpoint loads at all and whether the cast is lossless. It says
+nothing about the recipe, which on Hopper is not exercised.
 
 ## What is not verified
 
