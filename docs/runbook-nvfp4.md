@@ -104,8 +104,12 @@ nvfp4_setup            # clones modelopt at the pinned commit and patches ptq.py
 nvfp4_persist
 ```
 
-`nvfp4_setup` prints the pip line for the calibration deps: modelopt from the
-clone, `tilelang==0.1.8`, `torch>=2.10`, `safetensors>=0.7`. Install them, then:
+`nvfp4_setup` clones and patches modelopt; `nvfp4_calib_env` builds the
+calibration venv: torch from the cu128 index, `tilelang==0.1.8`, modelopt, and
+`transformers<5.15` because modelopt pins it there. The venv is deliberate:
+the vLLM image ships a newer transformers, and a box that does both roles
+must not let one install break the other. Every calibration function picks
+the venv up when it exists. Then:
 
 ```bash
 nvfp4_get src          # 475 GiB
@@ -164,24 +168,35 @@ files under `csrc/`, so the precompiled wheel of its merge base cannot be used
 and the extension has to be built. The nightly image has every dependency
 compiled; vLLM is rebuilt on top of it, about an hour.
 
+On vast.ai the image is the instance. The template:
+
+| field | value |
+| --- | --- |
+| image | `vllm/vllm-openai:nightly`, or `cu129-nightly` when the host reports Max CUDA 12.x |
+| one box for both roles | same image; the calibration deps go into their own venv via `nvfp4_calib_env`, disk 3500 GB or more |
+| launch mode | SSH. vast overrides the image ENTRYPOINT in this mode, so `vllm serve` never starts and you land in a shell |
+| container disk | 2500 GB or more, set on the search page, cannot be changed after |
+| on-start | empty |
+
+Inside the instance `nvfp4_stand` prints the build, and then:
+
 ```bash
-source /quantizer/scripts/foundry-nvfp4.sh
 nvfp4_get src ; nvfp4_get eval
-nvfp4_stand            # prints the docker run and build commands, run them by hand
-```
-
-Inside the container, after the build, `nvfp4_stand`'s last lines re-source
-this file with `NVFP4_ROOT=/host`, and then:
-
-```bash
-nvfp4_ref              # native checkpoint: the reference logprobs
+nvfp4_ref              # native checkpoint: the reference, and the smoke test of the branch on this GPU
 nvfp4_repeat           # reference against itself: the noise floor
-nvfp4_score /host/nvfp4/DeepSeek-V4.1-Flash-NVFP4-flat   flat
-nvfp4_score /host/nvfp4/DeepSeek-V4.1-Flash-NVFP4-nvidia nvidia
-nvfp4_score /host/nvfp4/DeepSeek-V4.1-Flash-NVFP4-atomic atomic
+hf download AtomicChat/DeepSeek-V4.1-Flash-NVFP4-flat   --local-dir /nvfp4/DeepSeek-V4.1-Flash-NVFP4-flat
+hf download AtomicChat/DeepSeek-V4.1-Flash-NVFP4-nvidia --local-dir /nvfp4/DeepSeek-V4.1-Flash-NVFP4-nvidia
+hf download AtomicChat/DeepSeek-V4.1-Flash-NVFP4-atomic --local-dir /nvfp4/DeepSeek-V4.1-Flash-NVFP4-atomic
+nvfp4_score /nvfp4/DeepSeek-V4.1-Flash-NVFP4-flat   flat
+nvfp4_score /nvfp4/DeepSeek-V4.1-Flash-NVFP4-nvidia nvidia
+nvfp4_score /nvfp4/DeepSeek-V4.1-Flash-NVFP4-atomic atomic
 nvfp4_kld flat ; nvfp4_kld nvidia ; nvfp4_kld atomic
 nvfp4_table
 ```
+
+Run `nvfp4_ref` before downloading anything else. It is the one step that
+depends on nothing from the calib box, and on an RTX PRO 6000 stand it is
+also the test of whether the branch runs on SM120 at all.
 
 One `nvfp4_score` is one model load and every corpus in `NVFP4_CORPORA`,
 `neutral code agentic` by default, so the table comes out per corpus from five

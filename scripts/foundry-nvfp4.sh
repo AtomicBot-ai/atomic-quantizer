@@ -48,7 +48,7 @@
 # will sit within a few percent of each other on KLD, and the one number that
 # is guaranteed to differ is calibration coverage, which nvfp4_coverage prints.
 
-NVFP4_VERSION=2026-09-10.01
+NVFP4_VERSION=2026-09-10.02
 
 NVFP4_UP=${NVFP4_UP:-deepseek-ai/DeepSeek-V4.1-Flash}
 NVFP4_ORG=${NVFP4_ORG:-AtomicChat}
@@ -75,6 +75,11 @@ NVFP4_OUT=${NVFP4_OUT:-$NVFP4_ROOT/nvfp4}        # exported checkpoints, one dir
 NVFP4_EVAL=${NVFP4_EVAL:-$NVFP4_ROOT/eval}
 NVFP4_LOGS=${NVFP4_LOGS:-$NVFP4_ROOT/logs}
 NVFP4_TOOLS=${NVFP4_TOOLS:-$NVFP4_ROOT/tools}    # modelopt clone and the helpers
+# The calibration python. modelopt pins transformers below 5.15 and the vLLM
+# image ships a newer one, so on a box that does both, calibration lives in
+# its own venv and vLLM stays in the image python. nvfp4_calib_env builds it;
+# every calibration function uses it when it exists and python3 otherwise.
+NVFP4_VENV=${NVFP4_VENV:-$NVFP4_ROOT/calib-venv}
 NVFP4_HF=${NVFP4_HF:-$NVFP4_ROOT/hf}
 
 # Calibration protocol.
@@ -107,7 +112,8 @@ nvfp4_help() {
 foundry-nvfp4 $NVFP4_VERSION      upstream $NVFP4_UP
 
   box
-    nvfp4_setup              python deps, modelopt at the pinned commit, helpers
+    nvfp4_setup              modelopt at the pinned commit, patched, plus the helpers
+    nvfp4_calib_env          the calibration venv: torch, tilelang, modelopt, transformers<5.15
     nvfp4_persist            source this file from every new tmux pane
     nvfp4_check              disk, GPUs, RAM, what is on disk already
     nvfp4_box calib|stand    the command list for that box, paste one at a time
@@ -128,7 +134,7 @@ foundry-nvfp4 $NVFP4_VERSION      upstream $NVFP4_UP
     nvfp4_export NAME        lossless cast plus that calibration -> $NVFP4_OUT/$NVFP4_STEM-NVFP4-NAME
 
   stand box
-    nvfp4_stand              the docker and build commands for the vLLM branch, printed
+    nvfp4_stand              the vast template settings and the vLLM branch build, printed
     nvfp4_ref                reference logprobs from the native checkpoint
     nvfp4_score DIR NAME     logprobs from one NVFP4 checkpoint
     nvfp4_kld NAME           the bracket, top-1 and ppl against the reference
@@ -156,6 +162,7 @@ nvfp4_box() {
     calib) cat << EOF
 # calibration box: 8xH200 or 8xB200, 2 TB NVMe (src + reshard + three exports of ~300 GiB), host RAM >= 600 GB
 nvfp4_setup
+nvfp4_calib_env
 nvfp4_persist
 nvfp4_check
 nvfp4_get src
@@ -178,10 +185,13 @@ nvfp4_setup
 nvfp4_persist
 nvfp4_get src
 nvfp4_get eval
-nvfp4_stand                            # prints the docker + build commands, run them by hand
-# inside the container, source this file again, then:
-nvfp4_ref                              # native checkpoint, the reference
+nvfp4_stand                            # the template settings and the build, read it first
+nvfp4_ref                              # native checkpoint, the reference; also the SM120 smoke test
 nvfp4_repeat                           # noise floor, reference against itself
+# the three NVFP4 checkpoints, once the calib box pushed them:
+hf download $NVFP4_REPO-flat   --local-dir $NVFP4_OUT/$NVFP4_STEM-NVFP4-flat
+hf download $NVFP4_REPO-nvidia --local-dir $NVFP4_OUT/$NVFP4_STEM-NVFP4-nvidia
+hf download $NVFP4_REPO-atomic --local-dir $NVFP4_OUT/$NVFP4_STEM-NVFP4-atomic
 nvfp4_score $NVFP4_OUT/$NVFP4_STEM-NVFP4-flat   flat
 nvfp4_score $NVFP4_OUT/$NVFP4_STEM-NVFP4-nvidia nvidia
 nvfp4_score $NVFP4_OUT/$NVFP4_STEM-NVFP4-atomic atomic
@@ -229,13 +239,44 @@ nvfp4_setup() {
     nvfp4_write_py > /dev/null
     python3 "$NVFP4_TOOLS/nvfp4_patch_ptq.py" "$NVFP4_TOOLS/modelopt/examples/deepseek/deepseek_v4/ptq.py" || return 1
     echo
-    echo "python deps for the calibration box (skip on the stand, vLLM's image has torch):"
-    echo "  pip install -e $NVFP4_TOOLS/modelopt"
-    echo "  pip install 'torch>=2.10' 'safetensors>=0.7' transformers tokenizers tilelang==0.1.8 sympy Pillow numpy tqdm"
+    echo "calibration box: run  nvfp4_calib_env  next. Stand box: nothing more to install."
     echo
     echo "helpers written to $NVFP4_TOOLS, modelopt at $NVFP4_MODELOPT_SHA with the V4.1 patch applied"
 }
 
+
+
+# The calibration venv. torch from the cu128 index because modelopt pulls
+# cupy-cuda12x, which wants a CUDA 12 runtime; a 13.x driver runs it fine.
+# tilelang compiles its kernels with whatever nvcc is on PATH, the image's.
+nvfp4_calib_env() {
+    if [ -x "$NVFP4_VENV/bin/python3" ] && "$NVFP4_VENV/bin/python3" -c "import modelopt, tilelang" 2>/dev/null; then
+        echo "already here: $NVFP4_VENV"; return 0
+    fi
+    [ -d "$NVFP4_TOOLS/modelopt/.git" ] || { echo "no modelopt clone. Run:  nvfp4_setup"; return 1; }
+    command -v nvcc > /dev/null || echo "WARNING: no nvcc on PATH, tilelang cannot compile kernels without it"
+    python3 -m venv "$NVFP4_VENV" || return 1
+    "$NVFP4_VENV/bin/pip" install -q -U pip wheel setuptools || return 1
+    "$NVFP4_VENV/bin/pip" install -q torch --index-url https://download.pytorch.org/whl/cu128 || return 1
+    "$NVFP4_VENV/bin/pip" install -q "transformers>=4.57,<5.15" tokenizers "safetensors>=0.7" numpy sympy Pillow tqdm \
+        tilelang==0.1.8 "huggingface_hub[cli,hf_transfer]" || return 1
+    "$NVFP4_VENV/bin/pip" install -q -e "$NVFP4_TOOLS/modelopt" || return 1
+    "$NVFP4_VENV/bin/python3" - << 'VENVEOF'
+import torch, tilelang, modelopt, transformers
+print("torch %s cuda %s   tilelang %s   modelopt %s   transformers %s" % (
+    torch.__version__, torch.version.cuda, tilelang.__version__, modelopt.__version__, transformers.__version__))
+print("gpus:", torch.cuda.device_count())
+VENVEOF
+    echo "calibration venv ready at $NVFP4_VENV"
+}
+
+nvfp4_py() {
+    if [ -x "$NVFP4_VENV/bin/python3" ]; then echo "$NVFP4_VENV/bin/python3"; else echo python3; fi
+}
+
+nvfp4_torchrun() {
+    if [ -x "$NVFP4_VENV/bin/torchrun" ]; then echo "$NVFP4_VENV/bin/torchrun"; else echo torchrun; fi
+}
 
 # ================================================================== get
 
@@ -290,7 +331,7 @@ nvfp4_reshard() {
     ram=$(free -g 2>/dev/null | awk '/Mem:/ {print $2}')
     [ -n "$ram" ] && [ "$ram" -lt 550 ] && echo "WARNING: ${ram} GB RAM, convert.py holds ~480 GB before writing"
     date
-    python3 "$NVFP4_SRC/inference/convert.py" \
+    "$(nvfp4_py)" "$NVFP4_SRC/inference/convert.py" \
         --hf-ckpt-path "$NVFP4_SRC" --save-path "$NVFP4_MP" \
         --model-parallel "$NVFP4_TP" --expert-dtype fp4 --tokenizer-path "$NVFP4_SRC" \
         2>&1 | tee "$NVFP4_LOGS/reshard.log"
@@ -301,7 +342,7 @@ nvfp4_reshard() {
 nvfp4_calib_jsonl() {
     [ -f "$NVFP4_EVAL/calib_train.txt" ] || { echo "no corpus. Run:  nvfp4_get calib"; return 1; }
     nvfp4_write_py > /dev/null
-    python3 "$NVFP4_TOOLS/nvfp4_calib_jsonl.py" "$NVFP4_SRC" "$NVFP4_EVAL/calib_train.txt" \
+    "$(nvfp4_py)" "$NVFP4_TOOLS/nvfp4_calib_jsonl.py" "$NVFP4_SRC" "$NVFP4_EVAL/calib_train.txt" \
         "$NVFP4_EVAL/calib.jsonl" --window "$NVFP4_CALIB_SEQ" 2>&1 | tee "$NVFP4_LOGS/calib-jsonl.log"
 }
 
@@ -330,7 +371,7 @@ nvfp4_calib() {
     echo "calibration '$name': $ds, $size samples of $seq tokens, $NVFP4_TP ranks"
     echo "first run compiles the tilelang kernels, that alone is many minutes"
     date
-    torchrun --nproc-per-node "$NVFP4_TP" --master_port 12346 \
+    "$(nvfp4_torchrun)" --nproc-per-node "$NVFP4_TP" --master_port 12346 \
         "$NVFP4_TOOLS/modelopt/examples/deepseek/deepseek_v4/ptq.py" \
         --model_path "$NVFP4_MP" \
         --config "$NVFP4_SRC/inference/config.json" \
@@ -353,14 +394,14 @@ nvfp4_amax_flat() {
     nvfp4_write_py > /dev/null
     local out="$NVFP4_AMAX/flat"
     mkdir -p "$out"
-    python3 "$NVFP4_TOOLS/nvfp4_amax_flat.py" "$NVFP4_SRC/config.json" "$out"
+    "$(nvfp4_py)" "$NVFP4_TOOLS/nvfp4_amax_flat.py" "$NVFP4_SRC/config.json" "$out"
 }
 
 nvfp4_coverage() {
     local name="${1:-}"
     [ -d "$NVFP4_AMAX/$name" ] || { echo "nvfp4_coverage NAME   (one of: $(ls "$NVFP4_AMAX" 2>/dev/null | tr '\n' ' '))"; return 1; }
     nvfp4_write_py > /dev/null
-    python3 "$NVFP4_TOOLS/nvfp4_coverage.py" "$NVFP4_AMAX/$name" "$NVFP4_SRC/config.json" \
+    "$(nvfp4_py)" "$NVFP4_TOOLS/nvfp4_coverage.py" "$NVFP4_AMAX/$name" "$NVFP4_SRC/config.json" \
         "$NVFP4_LOGS/coverage-$name.json" 2>&1 | tee "$NVFP4_LOGS/coverage-$name.log"
     nvfp4_upload "$NVFP4_LOGS/coverage-$name.json" "logs/coverage-$name.json"
 }
@@ -377,7 +418,7 @@ nvfp4_export() {
     if [ -f "$out/config.json" ]; then echo "already here: $out"; return 0; fi
     local dev=cpu; command -v nvidia-smi > /dev/null && dev=cuda
     date
-    python3 "$NVFP4_TOOLS/modelopt/examples/deepseek/deepseek_v4/quantize_to_nvfp4.py" \
+    "$(nvfp4_py)" "$NVFP4_TOOLS/modelopt/examples/deepseek/deepseek_v4/quantize_to_nvfp4.py" \
         --amax_path "$NVFP4_AMAX/$name" \
         --source_ckpt "$NVFP4_SRC" \
         --output_ckpt "$out" \
@@ -404,23 +445,33 @@ CHKEOF
 # op, group size 32 in per_token_group_quant), so the precompiled wheel of its
 # merge base cannot be used: it has to be built. The nightly image has every
 # dependency compiled already, vLLM itself is rebuilt on top of it.
+#
+# On vast.ai the image IS the instance: make a template with this image and
+# the SSH launch mode. vast overrides the image ENTRYPOINT in that mode, so
+# "vllm serve" never fires and you land in a shell. Set the container disk in
+# the search page before renting, it cannot be changed after.
 nvfp4_stand() {
     cat << EOF
-# on the host:
-docker pull $NVFP4_VLLM_IMAGE
-docker run --gpus all --ipc=host --shm-size 64g -it --entrypoint bash \\
-    -v /:/host -e HF_TOKEN=\$HF_TOKEN $NVFP4_VLLM_IMAGE
+# vast.ai template for the stand
+#   image        $NVFP4_VLLM_IMAGE      (cu129-nightly instead if the host driver reports Max CUDA 12.x)
+#   launch mode  SSH
+#   disk         >= 2500 GB, set on the search page
+#   on-start     nothing; everything below is typed in
 
-# inside the container (paths under /host/... map to the host root):
+# inside the instance:
+git clone https://github.com/AtomicBot-ai/atomic-quantizer /quantizer
 git clone https://github.com/vllm-project/vllm /vllm-src && cd /vllm-src
 git checkout $NVFP4_VLLM_SHA
 pip uninstall -y vllm
 MAX_JOBS=\$(nproc) pip install -e . --no-build-isolation 2>&1 | tail -3     # about an hour
 python3 -c "import vllm, vllm.models.deepseek_v4_1 as m; print(vllm.__version__, m.__file__)"
-ln -s /host${NVFP4_ROOT:-} /root/foundry-root 2>/dev/null
-export NVFP4_ROOT=/host${NVFP4_ROOT:-}
-source /host/quantizer/scripts/foundry-nvfp4.sh
-nvfp4_write_py
+source /quantizer/scripts/foundry-nvfp4.sh
+nvfp4_setup ; nvfp4_persist
+# doing the calibration on this same box too: nvfp4_calib_env, it does not touch the image python
+
+# on a bare metal host instead of vast, the same inside a container:
+#   docker run --gpus all --ipc=host --shm-size 64g -it --entrypoint bash -v /:/host $NVFP4_VLLM_IMAGE
+#   then export NVFP4_ROOT=/host before sourcing, so the layout lives on the host disk
 EOF
 }
 
