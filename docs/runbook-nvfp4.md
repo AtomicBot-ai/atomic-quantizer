@@ -254,15 +254,63 @@ the exports are done, build the same branch and run `nvfp4_ref` and
 the NVFP4 checkpoint loads at all and whether the cast is lossless. It says
 nothing about the recipe, which on Hopper is not exercised.
 
+## What the first run measured (2026-09-10)
+
+One box, 4×B200 on vast.ai, both roles, 3 h 40 min from `nvfp4_get src` to
+the table, plus an hour of fixing what this page now documents. Published:
+[AtomicChat/DeepSeek-V4.1-Flash-NVFP4-nvidia](https://huggingface.co/AtomicChat/DeepSeek-V4.1-Flash-NVFP4-nvidia)
+and [AtomicChat/DeepSeek-V4.1-Flash-NVFP4-metrics](https://huggingface.co/datasets/AtomicChat/DeepSeek-V4.1-Flash-NVFP4-metrics).
+
+| corpus | build | mean KLD | median | p99 | top-1 | ppl |
+| --- | --- | --- | --- | --- | --- | --- |
+| neutral | nvidia | 0.0353 | 0.00277 | 0.458 | 94.12 % | 2.9950 |
+| | flat | 0.0344 | 0.00276 | 0.433 | 94.39 % | 2.9928 |
+| | ref-repeat | 0.0159 | 0.00131 | 0.205 | 96.07 % | 2.9677 |
+| code | nvidia | 0.0199 | 0.000037 | 0.316 | 96.76 % | 1.8955 |
+| | flat | 0.0191 | 0.000036 | 0.296 | 96.84 % | 1.9013 |
+| | ref-repeat | 0.0101 | 0.000022 | 0.160 | 97.69 % | 1.8895 |
+| agentic | nvidia | 0.0089 | 0.000006 | 0.128 | 98.32 % | 1.3868 |
+| | flat | 0.0085 | 0.000005 | 0.127 | 98.40 % | 1.3871 |
+| | ref-repeat | 0.0055 | 0.000004 | 0.083 | 98.63 % | 1.3846 |
+
+The pre-registered reading, in order:
+
+1. **Coverage.** 15,246 of 15,360 routed experts calibrated (99.3 %); 342
+   expert projections took the per-layer fallback scale. The cast was
+   lossless on 16,986,931,200 of 16,986,931,200 blocks.
+2. **Divergence.** `nvidia` and `flat` are indistinguishable: medians agree
+   to the sixth decimal, mean KLD differs by 0.001 against a noise floor of
+   0.016. The theory section above predicted this. The W4A4 tax itself is
+   real and small: about 1.7 points of top-1 beyond noise on neutral, 0.8 %
+   perplexity on text, 0.5 % on code, 0.2 % on agentic.
+3. **Tails.** No calibration-induced clipping visible: p99 differs by the
+   noise, the single max outlier moves either way.
+
+What the noise floor means here: the original scored twice against itself
+flips 2–4 % of top-1 tokens, because MoE routing on non-deterministic kernels
+flips near-tied experts and the flip cascades through 40 layers. The mean is
+tail-dominated; the median resolves differences three orders of magnitude
+smaller. Any claim between two NVFP4 builds of this model has to be made on
+the median or on more windows, not on the mean.
+
+Timings that matter for the next run: reshard 2.5 min (not the hours this
+page used to say; the NVMe did 50 GB/s), calibration 10 min of forwards plus
+compile, export 7 min per checkpoint, vLLM branch build 12 min, and the first
+load of every distinct config 30–40 min of FlashInfer autotuning, of which the
+NVFP4 MoE kernel alone is 20. The autotune cache is keyed by the whole vLLM
+config, model path included, so every checkpoint pays it once. Publishing
+527 GB took 3.5 minutes: Xet deduplicates against the identical expert nibbles
+already on the Hub, only the scales travel.
+
 ## What is not verified
 
 Nothing on this page has run end to end. In particular:
 
-- The patched `ptq.py` has not been executed against V4.1. The two edits are
-  the two known incompatibilities; there may be a third.
-- No one has loaded an NVFP4 V4.1 checkpoint in vLLM. The loader's name
-  mapping and quant config route it, and the same route serves V4 NVFP4
-  checkpoints from NVIDIA, but the branch carries no test for it.
+- The patched `ptq.py` ran once on V4.1 on B200 with the 4-way reshard; other
+  MP counts and Hopper have not been tried.
+- The NVFP4 V4.1 checkpoint loads and scores in vLLM at `e47aa780` on B200 via
+  the FlashInfer TRT-LLM NVFP4 MoE backend; other backends, SM120 and
+  speculative decoding with the MXFP4 draft experts are untried.
 - `vllm/vllm-openai:nightly` moves daily. If the build on top of it fails on
   a dependency mismatch, pin the image to the tag printed by `docker pull`.
 - The `dsv41-flash` calibration build does not exist yet.
