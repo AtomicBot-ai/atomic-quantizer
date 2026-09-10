@@ -154,7 +154,7 @@ nvfp4_persist() {
 nvfp4_box() {
     case "${1:-}" in
     calib) cat << EOF
-# calibration box: 8xH200 or 8xB200, 1.5 TB NVMe, host RAM >= 600 GB
+# calibration box: 8xH200 or 8xB200, 2 TB NVMe (src + reshard + three exports of ~300 GiB), host RAM >= 600 GB
 nvfp4_setup
 nvfp4_persist
 nvfp4_check

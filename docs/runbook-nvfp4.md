@@ -71,7 +71,7 @@ Never publish a table from a Hopper stand, and never a throughput column.
 
 | box | GPUs | RAM | disk | does |
 | --- | --- | --- | --- | --- |
-| calib | 8×H200 or 8×B200 | 600 GB | 1.5 TB NVMe | reshard, three calibrations, three exports, push |
+| calib | 8×H200 or 8×B200 | 600 GB | 2 TB NVMe | reshard, three calibrations, three exports, push |
 | stand | any Blackwell that holds ~290 GiB of weights: 8×B200, 8×B300, or 8×RTX PRO 6000 (96 GB) | 300 GB | 2 TB NVMe | vLLM branch build, reference, three measurements |
 
 Which Blackwell matters less than that it is Blackwell. vLLM's NVFP4 W4A4
@@ -84,7 +84,12 @@ path; print the GPU and the selected backend beside every number, because the
 activation quantization is implemented separately in each backend.
 
 RAM on the calib box is set by DeepSeek's `convert.py`, which holds every
-shard of every rank in memory before writing. RAM on the stand is set by the
+shard of every rank in memory before writing. Disk on it is the source (475
+GiB), the resharded copy (475 GiB, deletable after the calibrations) and the
+exports: each one rewrites only the shards that hold experts, about 300 GiB,
+and hard links the Engram shards, so three exports are another 900 GiB. Peak
+is just under 1.9 TB. Uploading the three is 1.45 TB of egress, which on a
+rented box is the line item to look at before the GPU price. RAM on the stand is set by the
 Engram tables, which vLLM keeps in pinned host memory by default.
 
 `nvfp4_box calib` and `nvfp4_box stand` print the exact command list for each.
