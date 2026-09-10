@@ -275,34 +275,40 @@ nothing about the recipe, which on Hopper is not exercised.
 ## What the first run measured (2026-09-10)
 
 One box, 4×B200 on vast.ai, both roles, 3 h 40 min from `nvfp4_get src` to
-the table, plus an hour of fixing what this page now documents. Published:
+the first table, an hour of fixing what this page now documents, and another
+90 minutes of repeat runs. Published:
 [AtomicChat/DeepSeek-V4.1-Flash-NVFP4-nvidia](https://huggingface.co/AtomicChat/DeepSeek-V4.1-Flash-NVFP4-nvidia)
 and [AtomicChat/DeepSeek-V4.1-Flash-NVFP4-metrics](https://huggingface.co/datasets/AtomicChat/DeepSeek-V4.1-Flash-NVFP4-metrics).
 
-KL is the lower bound described above, coarsened on the set common to all
-four runs (common-set mass: median 1.00000, first percentile 0.993–0.996);
-intervals are the 95 % window bootstrap. Reference perplexity: 2.9685 neutral,
+KL is the lower bound described above, coarsened on the set common to all ten
+runs (common-set mass: median 1.00000, first percentile above 0.993). Runs:
+three of `nvidia`, three of `flat`, two repeats of the original and one with
+batch size 1, each a fresh engine start. Reference perplexity 2.9685 neutral,
 1.8919 code, 1.3861 agentic.
 
-| corpus | build | KL lower bound [95 % CI] | median | p99 | top-1 [95 % CI] | ppl | Δ ppl |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| neutral | nvidia | 0.0353 [0.0307, 0.0401] | 0.00276 | 0.458 | 94.12 [93.50, 94.76] | 2.9950 | +0.89 % |
-| | flat | 0.0343 [0.0297, 0.0394] | 0.00276 | 0.433 | 94.39 [93.78, 95.03] | 2.9928 | +0.82 % |
-| | ref-repeat | 0.0159 [0.0139, 0.0179] | 0.00131 | 0.205 | 96.07 [95.61, 96.55] | 2.9677 | −0.03 % |
-| code | nvidia | 0.0198 [0.0141, 0.0257] | 0.000037 | 0.314 | 96.76 [95.55, 97.89] | 1.8955 | +0.19 % |
-| | flat | 0.0191 [0.0135, 0.0249] | 0.000035 | 0.296 | 96.84 [95.66, 97.97] | 1.9013 | +0.50 % |
-| | ref-repeat | 0.0101 [0.0074, 0.0130] | 0.000022 | 0.159 | 97.69 [96.85, 98.48] | 1.8895 | −0.13 % |
-| agentic | nvidia | 0.0089 [0.0081, 0.0099] | 0.000006 | 0.128 | 98.32 [98.22, 98.43] | 1.3868 | +0.05 % |
-| | flat | 0.0085 [0.0076, 0.0096] | 0.000005 | 0.127 | 98.40 [98.30, 98.51] | 1.3871 | +0.07 % |
-| | ref-repeat | 0.0055 [0.0050, 0.0061] | 0.000004 | 0.083 | 98.63 [98.53, 98.73] | 1.3846 | −0.11 % |
+| corpus | build | runs | KL lower bound, mean of runs (run SD) | top-1 (run SD) | ppl | Δ ppl |
+| --- | --- | --- | --- | --- | --- | --- |
+| neutral | nvidia | 3 | 0.03548 (0.00020) | 94.10 % (0.05) | 2.9938 | +0.85 % |
+| | flat | 3 | 0.03459 (0.00040) | 94.29 % (0.10) | 2.9901 | +0.73 % |
+| | original repeats | 2 | 0.01596 (0.00013) | 96.13 % (0.08) | 2.9689 | +0.01 % |
+| | original, batch 1 | 1 | 0.01676 | 95.90 % | 2.9645 | −0.13 % |
+| code | nvidia | 3 | 0.02008 (0.00031) | 96.65 % (0.09) | 1.8991 | +0.38 % |
+| | flat | 3 | 0.01942 (0.00060) | 96.77 % (0.06) | 1.8995 | +0.40 % |
+| | original repeats | 2 | 0.01022 (0.00017) | 97.69 % (0.00) | 1.8907 | −0.06 % |
+| | original, batch 1 | 1 | 0.01108 | 97.55 % | 1.8922 | +0.02 % |
+| agentic | nvidia | 3 | 0.00888 (0.00011) | 98.34 % (0.05) | 1.3873 | +0.09 % |
+| | flat | 3 | 0.00856 (0.00019) | 98.37 % (0.04) | 1.3875 | +0.10 % |
+| | original repeats | 2 | 0.00537 (0.00020) | 98.67 % (0.05) | 1.3856 | −0.04 % |
+| | original, batch 1 | 1 | 0.00585 | 98.65 % | 1.3863 | +0.02 % |
 
-Paired per-window differences, A − B, 95 % window bootstrap:
+Paired per-window differences, per-window means averaged over runs first,
+A − B with 95 % window bootstrap:
 
-| corpus | nvidia − flat, KL | nvidia − flat, top-1 | flat − ref-repeat, KL | flat − ref-repeat, top-1 |
-| --- | --- | --- | --- | --- |
-| neutral | +0.0010 [−0.0002, +0.0021] | −0.27 pt [−0.46, −0.09] | +0.0185 [+0.0156, +0.0218] | −1.68 pt [−1.94, −1.43] |
-| code | +0.0007 [−0.0002, +0.0017] | −0.08 pt [−0.21, +0.04] | +0.0090 [+0.0061, +0.0120] | −0.85 pt [−1.25, −0.50] |
-| agentic | +0.0004 [+0.0000, +0.0008] | −0.08 pt [−0.21, +0.05] | +0.0030 [+0.0023, +0.0038] | −0.23 pt [−0.34, −0.12] |
+| corpus | nvidia − flat, KL | nvidia − flat, top-1 | flat − original, KL | flat − original, top-1 | batch 1 − original, KL |
+| --- | --- | --- | --- | --- | --- |
+| neutral | +0.0009 [+0.0004, +0.0014] | −0.19 pt [−0.34, −0.05] | +0.0186 [+0.0160, +0.0216] | −1.84 pt [−2.05, −1.64] | +0.0008 [+0.0004, +0.0012] |
+| code | +0.0007 [+0.0002, +0.0011] | −0.12 pt [−0.22, −0.03] | +0.0092 [+0.0062, +0.0123] | −0.92 pt [−1.28, −0.59] | +0.0009 [+0.0003, +0.0014] |
+| agentic | +0.0003 [−0.0000, +0.0007] | −0.02 pt [−0.10, +0.05] | +0.0032 [+0.0026, +0.0039] | −0.30 pt [−0.37, −0.23] | +0.0005 [−0.0000, +0.0010] |
 
 The pre-registered reading, in order:
 
@@ -314,19 +320,26 @@ The pre-registered reading, in order:
    and from the export and compared element by element: identical, worst
    difference 0.0. The packed bytes differ in 11 % of positions, every one of
    them a −0 nibble the export normalized to +0.
-2. **Divergence.** In this run the calibration showed no advantage. The paired
-   intervals for `nvidia − flat` contain zero on KL for neutral and code and
-   sit just above it on agentic; on top-1 the calibrated build is 0.27 points
-   worse on neutral with an interval that excludes zero, a tenth of the whole
-   NVFP4 cost. One run per build: this is one run's evidence, not a statement
-   of equivalence. What is clearly separated from the repeat of the original
-   on every corpus is the cost of the NVFP4 W4A4 path as a whole, native
-   MXFP4×MXFP8 kernels versus the FlashInfer TRT-LLM NVFP4 path: 1.7 points of
-   top-1 and +0.8 to +0.9 % perplexity on neutral, less on code and agentic.
-   That is the difference between two execution paths, not an isolated cost
-   of FP4 activations.
-3. **Tails.** p99 and max move within what the repeat shows; no
+2. **Divergence.** The calibration does not help this model and on text and
+   code it costs a little: `nvidia` sits 0.0009 KL and 0.19 points of top-1
+   behind `flat` on neutral, intervals excluding zero, per-run means agreeing to
+   the fourth decimal; the same on code; nothing on agentic. That is 5–7 % of
+   the whole NVFP4-path cost, and it is the direction the theory section
+   predicted: a per-expert ceiling set from a few hundred tokens can only clip
+   what it did not see, while the flat window already fits the clamped
+   activations. The NVFP4 path as a whole, native MXFP4×MXFP8 kernels against
+   the FlashInfer TRT-LLM NVFP4 path, costs 1.8 points of top-1 and +0.7 to
+   +0.9 % perplexity on neutral, half that on code, a tenth on agentic,
+   separated from the original's own spread on every corpus.
+3. **Tails.** p99 and max move within what the repeats show; no
    calibration-induced clipping is visible at this resolution.
+
+On the noise: two runs of the original diverge by 0.016 KL and disagree on
+4 % of top-1 tokens, but a build's mean divergence from the reference is
+stable to 0.0002–0.0006 across runs, so the mean is a usable statistic after
+all; batch size 1 leaves the spread in place (0.0168 against 0.0159 for the
+batch-4 repeats), so batching is not its source. Non-deterministic MoE kernels
+flipping near-tied experts remains the working hypothesis.
 
 The `agentic` corpus is teacher-forced text in the model's markup, scored one
 token at a time; it says nothing about tool calls or long free trajectories.
@@ -334,12 +347,12 @@ The eval corpora are disjoint from every calib-corpora build by construction,
 and the `nvidia` calibration used NVIDIA's datasets, so no measurement text
 was seen in calibration. Speed was not measured.
 
-Timings that matter for the next run: reshard 2.5 min (not the hours this
-page used to say; the NVMe did 50 GB/s), calibration 10 min of forwards plus
-compile, export 7 min per checkpoint, vLLM branch build 12 min, and the first
-load of every distinct config 30–40 min of FlashInfer autotuning, of which the
-NVFP4 MoE kernel alone is 20. The autotune cache is keyed by the whole vLLM
-config, model path included, so every checkpoint pays it once. Publishing
+Timings that matter for the next run: reshard 2.5 min (the NVMe did 50 GB/s),
+calibration 10 min of forwards plus compile, export 7 min per checkpoint, vLLM
+branch build 12 min, the first load of every distinct config 30–40 min of
+FlashInfer autotuning of which the NVFP4 MoE kernel alone is 20, and 11–16
+min per load once the cache is warm. The autotune cache is keyed by the whole
+vLLM config, model path included, so every checkpoint pays it once. Publishing
 527 GB took 3.5 minutes: Xet deduplicates against the identical expert nibbles
 already on the Hub, only the scales travel.
 
@@ -350,8 +363,8 @@ Nothing on this page has run end to end. In particular:
 - The patched `ptq.py` ran once on V4.1 on B200 with the 4-way reshard; other
   MP counts and Hopper have not been tried.
 - The NVFP4 V4.1 checkpoint loads and scores in vLLM at `e47aa780` on B200 via
-  the FlashInfer TRT-LLM NVFP4 MoE backend; other backends, SM120 and
-  speculative decoding with the MXFP4 draft experts are untried.
+  the FlashInfer TRT-LLM NVFP4 MoE backend, six times over; other backends,
+  SM120 and speculative decoding with the MXFP4 draft experts are untried.
 - `vllm/vllm-openai:nightly` moves daily. If the build on top of it fails on
   a dependency mismatch, pin the image to the tag printed by `docker pull`.
 - The `dsv41-flash` calibration build does not exist yet.
