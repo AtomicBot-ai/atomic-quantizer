@@ -952,7 +952,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import traceback
+    try:
+        main()
+    except BaseException:
+        traceback.print_exc()
+        # vLLM's shutdown can hang with the workers still holding every GPU;
+        # a hard exit lets the next run have them.
+        os._exit(1)
+    os._exit(0)
 LPEOF
 
 cat > "$NVFP4_TOOLS/nvfp4_kld.py" << 'KLDEOF'
