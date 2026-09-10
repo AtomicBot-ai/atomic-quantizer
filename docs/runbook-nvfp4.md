@@ -45,8 +45,8 @@ Three checkpoints, one code path, one variable:
 
 Theory, worked through in the chat that produced this route, says the three
 will sit within a few percent of each other on KLD. The input of w1/w3 is
-bounded at 189 by RMSNorm and the norm weights, the input of w2 at 100 by the
-SwiGLU clamps, and E4M3 with a flat scale of 1.0 covers everything from 0.094
+bounded at 189 by RMSNorm and the norm weights, the input of w2 at 150 by the
+SwiGLU clamps times the 1.5 routing weight (the calibration saw exactly 150.00), and E4M3 with a flat scale of 1.0 covers everything from 0.094
 to 2688 with full precision. Calibration helps only the quiet blocks below
 0.094 and carries a risk of its own: a per-expert ceiling set by the maximum
 seen on a few hundred tokens clips whatever exceeds it later.

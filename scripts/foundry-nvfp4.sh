@@ -48,7 +48,7 @@
 # will sit within a few percent of each other on KLD, and the one number that
 # is guaranteed to differ is calibration coverage, which nvfp4_coverage prints.
 
-NVFP4_VERSION=2026-09-10.02
+NVFP4_VERSION=2026-09-10.03
 
 NVFP4_UP=${NVFP4_UP:-deepseek-ai/DeepSeek-V4.1-Flash}
 NVFP4_ORG=${NVFP4_ORG:-AtomicChat}
@@ -153,6 +153,8 @@ nvfp4_persist() {
     if [ -n "$HF_TOKEN" ]; then
         grep -q "HF_TOKEN=" ~/.bashrc 2>/dev/null || echo "export HF_TOKEN=$HF_TOKEN" >> ~/.bashrc
         echo "HF_TOKEN written to ~/.bashrc. The box is disposable, the token is not: revoke it after."
+        mkdir -p "$HF_HOME" && printf '%s' "$HF_TOKEN" > "$HF_HOME/token"
+        echo "token also written to $HF_HOME/token (the image may preset HF_HOME; huggingface_hub reads it from there)"
     fi
     echo "new panes will source $me"
 }
@@ -259,7 +261,11 @@ nvfp4_calib_env() {
     "$NVFP4_VENV/bin/pip" install -q -U pip wheel setuptools || return 1
     "$NVFP4_VENV/bin/pip" install -q torch --index-url https://download.pytorch.org/whl/cu128 || return 1
     "$NVFP4_VENV/bin/pip" install -q "transformers>=4.57,<5.15" tokenizers "safetensors>=0.7" numpy sympy Pillow tqdm \
-        tilelang==0.1.8 "huggingface_hub[cli,hf_transfer]" || return 1
+        tilelang==0.1.8 requests datasets "huggingface_hub[cli]" || return 1
+    # tilelang 0.1.8 pulls the newest apache-tvm-ffi, and 0.1.10+ breaks its bundled TVM
+    # (AttributeError in tvm_ffi.registry on import, or _NestedLoopCheckVisitor at compile).
+    # 0.1.9 is the last release that passes DeepSeek's model.py self-test on B200.
+    "$NVFP4_VENV/bin/pip" install -q "apache-tvm-ffi==0.1.9" || return 1
     "$NVFP4_VENV/bin/pip" install -q -e "$NVFP4_TOOLS/modelopt" || return 1
     "$NVFP4_VENV/bin/python3" - << 'VENVEOF'
 import torch, tilelang, modelopt, transformers
@@ -335,8 +341,10 @@ nvfp4_reshard() {
         --hf-ckpt-path "$NVFP4_SRC" --save-path "$NVFP4_MP" \
         --model-parallel "$NVFP4_TP" --expert-dtype fp4 --tokenizer-path "$NVFP4_SRC" \
         2>&1 | tee "$NVFP4_LOGS/reshard.log"
+    local rc=${PIPESTATUS[0]}
     date
     ls -lh "$NVFP4_MP"
+    return $rc
 }
 
 nvfp4_calib_jsonl() {
@@ -344,6 +352,7 @@ nvfp4_calib_jsonl() {
     nvfp4_write_py > /dev/null
     "$(nvfp4_py)" "$NVFP4_TOOLS/nvfp4_calib_jsonl.py" "$NVFP4_SRC" "$NVFP4_EVAL/calib_train.txt" \
         "$NVFP4_EVAL/calib.jsonl" --window "$NVFP4_CALIB_SEQ" 2>&1 | tee "$NVFP4_LOGS/calib-jsonl.log"
+    return ${PIPESTATUS[0]}
 }
 
 # nvfp4_calib NAME
@@ -381,8 +390,10 @@ nvfp4_calib() {
         --calib_size "$size" --calib_seq "$seq" \
         --calib_dataset $(echo $ds) \
         2>&1 | tee "$NVFP4_LOGS/calib-$name.log"
+    local rc=${PIPESTATUS[0]}
     date
     ls -la "$out"
+    [ $rc = 0 ] && ls "$out"/amax_dict_rank*.pt > /dev/null 2>&1 || { echo "calibration left no amax dumps"; return 1; }
 }
 
 # The no-calibration variant. input amax = 6 * 448 = 2688 for every routed
@@ -403,7 +414,9 @@ nvfp4_coverage() {
     nvfp4_write_py > /dev/null
     "$(nvfp4_py)" "$NVFP4_TOOLS/nvfp4_coverage.py" "$NVFP4_AMAX/$name" "$NVFP4_SRC/config.json" \
         "$NVFP4_LOGS/coverage-$name.json" 2>&1 | tee "$NVFP4_LOGS/coverage-$name.log"
+    local rc=${PIPESTATUS[0]}
     nvfp4_upload "$NVFP4_LOGS/coverage-$name.json" "logs/coverage-$name.json"
+    return $rc
 }
 
 # Lossless MXFP4 -> NVFP4 cast on the routed experts, input_scale from the
@@ -424,7 +437,9 @@ nvfp4_export() {
         --output_ckpt "$out" \
         --cast_mxfp4_to_nvfp4 --device "$dev" \
         2>&1 | tee "$NVFP4_LOGS/export-$name.log"
+    local rc=${PIPESTATUS[0]}
     date
+    [ $rc = 0 ] || { echo "export failed, see $NVFP4_LOGS/export-$name.log"; return $rc; }
     grep -E '\[cast\]|lossless|synthes' "$NVFP4_LOGS/export-$name.log" | tail -5
     python3 - "$out" << 'CHKEOF'
 import json, sys
@@ -455,16 +470,33 @@ nvfp4_stand() {
 # vast.ai template for the stand
 #   image        $NVFP4_VLLM_IMAGE      (cu129-nightly instead if the host driver reports Max CUDA 12.x)
 #   launch mode  SSH
-#   disk         >= 2500 GB, set on the search page
+#   disk         >= 2500 GB, set on the search page (3500 GB if the same box also calibrates)
 #   on-start     nothing; everything below is typed in
+#
+# What a real run on 4xB200 with vast's own vLLM template image taught (2026-09-10):
+#   * the template runs a "vllm" supervisor service that grabs every GPU with a
+#     default model; stop it and kill its workers before anything else
+#   * the image ships nvcc but not the CUDA library headers and .so files, so
+#     neither DeepGEMM nor vLLM's csrc compile until cuda-libraries-dev is installed
+#   * the branch builds a Rust frontend and needs cargo; rustup is enough
+#   * DeepGEMM is not in the image; the branch's installer needs
+#     VLLM_DOCKER_BUILD_CONTEXT=1 or its "uv pip install" refuses a system python
+#   * the extensions are named *_stable_libtorch; verify the build through the
+#     op registry, not "import vllm._C"
+#   * HF_HOME is preset by the image; nvfp4_persist writes the token there
 
 # inside the instance:
+supervisorctl stop vllm model-ui ray 2>/dev/null; pkill -f 'vllm serve'; pkill -9 -f 'VLLM::'
+apt-get install -y -qq cuda-libraries-dev-\$(nvcc --version | sed -n 's/.*release \\([0-9]*\\)\\.\\([0-9]*\\).*/\\1-\\2/p')
+curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal && source ~/.cargo/env
 git clone https://github.com/AtomicBot-ai/atomic-quantizer /quantizer
 git clone https://github.com/vllm-project/vllm /vllm-src && cd /vllm-src
 git checkout $NVFP4_VLLM_SHA
-pip uninstall -y vllm
-MAX_JOBS=\$(nproc) pip install -e . --no-build-isolation 2>&1 | tail -3     # about an hour
-python3 -c "import vllm, vllm.models.deepseek_v4_1 as m; print(vllm.__version__, m.__file__)"
+VLLM_DOCKER_BUILD_CONTEXT=1 bash tools/install_deepgemm.sh
+python3 -m pip install setuptools-rust cmake ninja setuptools_scm packaging wheel
+python3 -m pip uninstall -y vllm
+TORCH_CUDA_ARCH_LIST="10.0" MAX_JOBS=64 python3 -m pip install -e . --no-build-isolation --no-deps   # ~15 min on 96 cores
+cd / && python3 -c "import torch, vllm._custom_ops, deep_gemm; op = torch.ops._C.fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert; print('ok', op)"
 source /quantizer/scripts/foundry-nvfp4.sh
 nvfp4_setup ; nvfp4_persist
 # doing the calibration on this same box too: nvfp4_calib_env, it does not touch the image python
@@ -500,8 +532,10 @@ nvfp4_score() {
         --corpora $(echo $files) \
         --tp "$NVFP4_TP" --ctx "$NVFP4_CTX" --chunks "$NVFP4_CHUNKS" --topk "$NVFP4_TOPK" \
         2>&1 | tee "$NVFP4_LOGS/lp-$name.log"
+    local rc=${PIPESTATUS[0]}
     date
     nvfp4_upload "$NVFP4_LOGS/lp-$name.log" "logs/lp-$name.log"
+    return $rc
 }
 
 nvfp4_ref() {
@@ -514,7 +548,7 @@ nvfp4_repeat() {
 }
 
 nvfp4_kld() {
-    local name="${1:-}" c
+    local name="${1:-}" c rc=0
     [ -n "$name" ] || { echo "nvfp4_kld NAME   (scored: $(ls "$NVFP4_LOGS"/lp-*.log 2>/dev/null | xargs -n1 basename | sed 's/lp-//;s/.log//' | tr '\n' ' '))"; return 1; }
     nvfp4_write_py > /dev/null
     for c in $(echo $NVFP4_CORPORA); do
@@ -523,6 +557,7 @@ nvfp4_kld() {
         echo "--- $name on $c ---"
         python3 "$NVFP4_TOOLS/nvfp4_kld.py" "$NVFP4_LOGS/lp-ref-$c.npz" "$NVFP4_LOGS/lp-$name-$c.npz" \
             "$NVFP4_LOGS/kld-$name-$c.json" 2>&1 | tee "$NVFP4_LOGS/kld-$name-$c.log"
+        [ ${PIPESTATUS[0]} = 0 ] || rc=1
         nvfp4_upload "$NVFP4_LOGS/kld-$name-$c.json" "logs/kld-$name-$c.json"
         nvfp4_upload "$NVFP4_LOGS/kld-$name-$c.log" "logs/kld-$name-$c.log"
     done
@@ -804,7 +839,7 @@ print("with input amax    : %d   (%.1f %%)" % (res["experts_with_input_amax"], 1
 print("without, guessed   : %d" % res["experts_without_input_amax"])
 print("per layer seen     : min %d  max %d" % (min(per_layer), max(per_layer)))
 print("w1/w3 input amax   : median %.2f  p99 %.2f  max %.2f   (2688 = flat cast, window ceiling)" % (res["median_input_amax_w13"], res["p99_input_amax_w13"], res["max_input_amax_w13"]))
-print("w2 input amax      : median %.2f  p99 %.2f  max %.2f   (physical bound 100 from the SwiGLU clamp)" % (res["median_input_amax_w2"], res["p99_input_amax_w2"], res["max_input_amax_w2"]))
+print("w2 input amax      : median %.2f  p99 %.2f  max %.2f   (physical bound 150: SwiGLU clamps times the 1.5 routing weight)" % (res["median_input_amax_w2"], res["p99_input_amax_w2"], res["max_input_amax_w2"]))
 print("written to %s" % out)
 COVEOF
 
