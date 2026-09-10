@@ -11,7 +11,9 @@ thing on the wrong GPU and publishing a table that means nothing.
 MXFP4: E2M1 nibbles with one E8M0 scale per 32 weights, 259 GiB of the 475 GiB
 checkpoint. NVFP4 keeps every nibble and rewrites the scales as E4M3 per 16
 plus one fp32 per tensor. The conversion is lossless by construction, needs no
-GPU, and makes the file 8 GiB larger. Nothing on this route shrinks anything.
+GPU, and makes the checkpoint 15.8 GiB larger (17.00 GB: the expert scales
+double, 543 G parameters at 1/32 byte each). Nothing on this route shrinks
+anything.
 The Engram tables, 183 GiB of FP8, stay FP8: no engine loads them any other way.
 
 **The recipe is one scalar per expert projection.** NVIDIA's recipe for V4 is
@@ -208,24 +210,40 @@ that combination has not been loaded by anyone yet.
 
 ## The measurement protocol
 
-Same as the published GGUF and MLX tables so the numbers can sit side by side:
-windows of 4096 tokens starting with BOS, only the second half scored, 24
-windows, reference first in the divergence, raw token ids in, no chat
-template.
+The window layout follows the GGUF and MLX tables: chunks of 4096 tokens
+starting with BOS, only the second half of each chunk scored, 24 chunks,
+reference first in the divergence, raw token ids in, no chat template. The
+numbers are still not directly comparable with those tables: a different
+engine, a different reference and a coarsened KL. Scoring only the second half
+fixes the regime, predictions with 2k to 4k tokens of context; it does not make
+the comparison fairer for short contexts, it leaves them out.
 
-One difference has to be printed beside every number. vLLM returns top-K log
-probabilities, not the whole vocabulary, so `nvfp4_kld.py` gives a bracket:
-`low` assumes every reference token the candidate did not rank sits at the
-candidate's K-th probability, `high` spreads the candidate's leftover mass
-uniformly over the rest of the vocabulary. The truth is between. With K = 512
-on a language model the two agree to the third decimal; on a synthetic flat
-distribution with K = 64 the tool bracketed an exact 0.0103 as 0.0089 to
-0.0528, which is the worst case and is why K is 512. Top-1 agreement and
-perplexity need no bracket and are exact.
+vLLM returns top-K log probabilities, not the whole vocabulary, so the KL is a
+**lower bound** and is labelled as one. `nvfp4_kld.py` takes S = the
+reference's top-512 ids that every compared run also ranked, with exact p and
+q on S, and one bucket for everything else on both sides. Coarsening onto a
+common partition can only lower the KL, so the number is guaranteed to be at or
+below the true divergence. There is no upper bound from top-K data: a token the
+candidate ranked below K can carry any amount of divergence, and an earlier
+version of this tool that "bracketed" the truth with a uniform-tail guess was
+wrong about that. The common-set mass is printed beside every number; on this
+model its median is 1.00000 and its first percentile above 0.993.
 
-`nvfp4_repeat` scores the reference against itself. On a deterministic engine
-it is zero; on vLLM with batching it may not be, and whatever it is, three
-times it is the smallest gap the table may call a difference.
+Uncertainty is a bootstrap over windows, 2048 positions each, with 95 %
+percentile intervals of the per-window mean; positions are not independent,
+windows are treated as such. Two builds measured against the same reference are
+compared with `nvfp4_compare`, the paired per-window difference with its own
+interval. An interval that contains zero means no convincing difference was
+found, not that the two are equivalent; equivalence would need a tolerance
+chosen before looking at the data, and none was.
+
+`nvfp4_repeat` scores the reference against itself. It is one sample of the
+engine's run-to-run variation, which the window intervals do not contain. On
+this stand it was far from zero: 2–4 % of top-1 tokens flip between two runs
+of the same model. Non-deterministic MoE kernels flipping near-tied experts is
+the working hypothesis, not an established cause; batching, kernel selection
+and the logprob extraction path have not been ruled out, and vLLM's batch
+invariance mode has not been tried on this branch.
 
 ## How long the stand takes
 
@@ -243,7 +261,7 @@ build overlapped:
 
 The number that decides the bill is the model load, and it is the least
 predictable: the Engram tables go to pinned host memory, the NVFP4 experts get
-repacked at load, and nobody has loaded this combination before. Budget a
+repacked at load, and nobody had loaded this combination before. Budget a
 day of B200 time and expect to use half of it. A 4×B200 stand also fits, at
 `NVFP4_TP=4`, with the Engram tables off the GPUs; the loads take the same
 time, the hour costs half.
@@ -261,37 +279,60 @@ the table, plus an hour of fixing what this page now documents. Published:
 [AtomicChat/DeepSeek-V4.1-Flash-NVFP4-nvidia](https://huggingface.co/AtomicChat/DeepSeek-V4.1-Flash-NVFP4-nvidia)
 and [AtomicChat/DeepSeek-V4.1-Flash-NVFP4-metrics](https://huggingface.co/datasets/AtomicChat/DeepSeek-V4.1-Flash-NVFP4-metrics).
 
-| corpus | build | mean KLD | median | p99 | top-1 | ppl |
-| --- | --- | --- | --- | --- | --- | --- |
-| neutral | nvidia | 0.0353 | 0.00277 | 0.458 | 94.12 % | 2.9950 |
-| | flat | 0.0344 | 0.00276 | 0.433 | 94.39 % | 2.9928 |
-| | ref-repeat | 0.0159 | 0.00131 | 0.205 | 96.07 % | 2.9677 |
-| code | nvidia | 0.0199 | 0.000037 | 0.316 | 96.76 % | 1.8955 |
-| | flat | 0.0191 | 0.000036 | 0.296 | 96.84 % | 1.9013 |
-| | ref-repeat | 0.0101 | 0.000022 | 0.160 | 97.69 % | 1.8895 |
-| agentic | nvidia | 0.0089 | 0.000006 | 0.128 | 98.32 % | 1.3868 |
-| | flat | 0.0085 | 0.000005 | 0.127 | 98.40 % | 1.3871 |
-| | ref-repeat | 0.0055 | 0.000004 | 0.083 | 98.63 % | 1.3846 |
+KL is the lower bound described above, coarsened on the set common to all
+four runs (common-set mass: median 1.00000, first percentile 0.993–0.996);
+intervals are the 95 % window bootstrap. Reference perplexity: 2.9685 neutral,
+1.8919 code, 1.3861 agentic.
+
+| corpus | build | KL lower bound [95 % CI] | median | p99 | top-1 [95 % CI] | ppl | Δ ppl |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| neutral | nvidia | 0.0353 [0.0307, 0.0401] | 0.00276 | 0.458 | 94.12 [93.50, 94.76] | 2.9950 | +0.89 % |
+| | flat | 0.0343 [0.0297, 0.0394] | 0.00276 | 0.433 | 94.39 [93.78, 95.03] | 2.9928 | +0.82 % |
+| | ref-repeat | 0.0159 [0.0139, 0.0179] | 0.00131 | 0.205 | 96.07 [95.61, 96.55] | 2.9677 | −0.03 % |
+| code | nvidia | 0.0198 [0.0141, 0.0257] | 0.000037 | 0.314 | 96.76 [95.55, 97.89] | 1.8955 | +0.19 % |
+| | flat | 0.0191 [0.0135, 0.0249] | 0.000035 | 0.296 | 96.84 [95.66, 97.97] | 1.9013 | +0.50 % |
+| | ref-repeat | 0.0101 [0.0074, 0.0130] | 0.000022 | 0.159 | 97.69 [96.85, 98.48] | 1.8895 | −0.13 % |
+| agentic | nvidia | 0.0089 [0.0081, 0.0099] | 0.000006 | 0.128 | 98.32 [98.22, 98.43] | 1.3868 | +0.05 % |
+| | flat | 0.0085 [0.0076, 0.0096] | 0.000005 | 0.127 | 98.40 [98.30, 98.51] | 1.3871 | +0.07 % |
+| | ref-repeat | 0.0055 [0.0050, 0.0061] | 0.000004 | 0.083 | 98.63 [98.53, 98.73] | 1.3846 | −0.11 % |
+
+Paired per-window differences, A − B, 95 % window bootstrap:
+
+| corpus | nvidia − flat, KL | nvidia − flat, top-1 | flat − ref-repeat, KL | flat − ref-repeat, top-1 |
+| --- | --- | --- | --- | --- |
+| neutral | +0.0010 [−0.0002, +0.0021] | −0.27 pt [−0.46, −0.09] | +0.0185 [+0.0156, +0.0218] | −1.68 pt [−1.94, −1.43] |
+| code | +0.0007 [−0.0002, +0.0017] | −0.08 pt [−0.21, +0.04] | +0.0090 [+0.0061, +0.0120] | −0.85 pt [−1.25, −0.50] |
+| agentic | +0.0004 [+0.0000, +0.0008] | −0.08 pt [−0.21, +0.05] | +0.0030 [+0.0023, +0.0038] | −0.23 pt [−0.34, −0.12] |
 
 The pre-registered reading, in order:
 
 1. **Coverage.** 15,246 of 15,360 routed experts calibrated (99.3 %); 342
-   expert projections took the per-layer fallback scale. The cast was
-   lossless on 16,986,931,200 of 16,986,931,200 blocks.
-2. **Divergence.** `nvidia` and `flat` are indistinguishable: medians agree
-   to the sixth decimal, mean KLD differs by 0.001 against a noise floor of
-   0.016. The theory section above predicted this. The W4A4 tax itself is
-   real and small: about 1.7 points of top-1 beyond noise on neutral, 0.8 %
-   perplexity on text, 0.5 % on code, 0.2 % on agentic.
-3. **Tails.** No calibration-induced clipping visible: p99 differs by the
-   noise, the single max outlier moves either way.
+   expert projections took the per-layer fallback scale. All 16,986,931,200
+   expert blocks had scales inside the exactly representable window, which is
+   what the exporter's `cast_blocks_lossless` counts; on top of that, 12
+   experts × 3 projections (0.42 G parameters) were dequantized from the source
+   and from the export and compared element by element: identical, worst
+   difference 0.0. The packed bytes differ in 11 % of positions, every one of
+   them a −0 nibble the export normalized to +0.
+2. **Divergence.** In this run the calibration showed no advantage. The paired
+   intervals for `nvidia − flat` contain zero on KL for neutral and code and
+   sit just above it on agentic; on top-1 the calibrated build is 0.27 points
+   worse on neutral with an interval that excludes zero, a tenth of the whole
+   NVFP4 cost. One run per build: this is one run's evidence, not a statement
+   of equivalence. What is clearly separated from the repeat of the original
+   on every corpus is the cost of the NVFP4 W4A4 path as a whole, native
+   MXFP4×MXFP8 kernels versus the FlashInfer TRT-LLM NVFP4 path: 1.7 points of
+   top-1 and +0.8 to +0.9 % perplexity on neutral, less on code and agentic.
+   That is the difference between two execution paths, not an isolated cost
+   of FP4 activations.
+3. **Tails.** p99 and max move within what the repeat shows; no
+   calibration-induced clipping is visible at this resolution.
 
-What the noise floor means here: the original scored twice against itself
-flips 2–4 % of top-1 tokens, because MoE routing on non-deterministic kernels
-flips near-tied experts and the flip cascades through 40 layers. The mean is
-tail-dominated; the median resolves differences three orders of magnitude
-smaller. Any claim between two NVFP4 builds of this model has to be made on
-the median or on more windows, not on the mean.
+The `agentic` corpus is teacher-forced text in the model's markup, scored one
+token at a time; it says nothing about tool calls or long free trajectories.
+The eval corpora are disjoint from every calib-corpora build by construction,
+and the `nvidia` calibration used NVIDIA's datasets, so no measurement text
+was seen in calibration. Speed was not measured.
 
 Timings that matter for the next run: reshard 2.5 min (not the hours this
 page used to say; the NVMe did 50 GB/s), calibration 10 min of forwards plus

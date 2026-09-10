@@ -48,7 +48,7 @@
 # will sit within a few percent of each other on KLD, and the one number that
 # is guaranteed to differ is calibration coverage, which nvfp4_coverage prints.
 
-NVFP4_VERSION=2026-09-10.03
+NVFP4_VERSION=2026-09-11.01
 
 NVFP4_UP=${NVFP4_UP:-deepseek-ai/DeepSeek-V4.1-Flash}
 NVFP4_ORG=${NVFP4_ORG:-AtomicChat}
@@ -137,7 +137,8 @@ foundry-nvfp4 $NVFP4_VERSION      upstream $NVFP4_UP
     nvfp4_stand              the vast template settings and the vLLM branch build, printed
     nvfp4_ref                reference logprobs from the native checkpoint
     nvfp4_score DIR NAME     logprobs from one NVFP4 checkpoint
-    nvfp4_kld NAME           the bracket, top-1 and ppl against the reference
+    nvfp4_kld NAME           KL lower bound with window intervals, top-1, ppl against the reference
+    nvfp4_compare A B        paired per-window difference of two measured candidates
     nvfp4_repeat             the noise floor: the reference against itself
     nvfp4_table              everything measured on this box
 
@@ -555,11 +556,29 @@ nvfp4_kld() {
         [ -f "$NVFP4_LOGS/lp-$name-$c.npz" ] || { echo "no $NVFP4_LOGS/lp-$name-$c.npz. Run:  nvfp4_score DIR $name"; return 1; }
         [ -f "$NVFP4_LOGS/lp-ref-$c.npz" ] || { echo "no reference for $c. Run:  nvfp4_ref"; return 1; }
         echo "--- $name on $c ---"
+        # every other measured run on this corpus joins the coarsening set, so
+        # the per-window means of all candidates are on one partition and pair
+        local also="" o
+        for o in "$NVFP4_LOGS"/lp-*-"$c".npz; do
+            case "$o" in *"/lp-ref-$c.npz"|*"/lp-$name-$c.npz") ;; *) also="$also $o" ;; esac
+        done
         python3 "$NVFP4_TOOLS/nvfp4_kld.py" "$NVFP4_LOGS/lp-ref-$c.npz" "$NVFP4_LOGS/lp-$name-$c.npz" \
-            "$NVFP4_LOGS/kld-$name-$c.json" 2>&1 | tee "$NVFP4_LOGS/kld-$name-$c.log"
+            "$NVFP4_LOGS/kld-$name-$c.json" ${also:+--also $(echo $also)} 2>&1 | tee "$NVFP4_LOGS/kld-$name-$c.log"
         [ ${PIPESTATUS[0]} = 0 ] || rc=1
         nvfp4_upload "$NVFP4_LOGS/kld-$name-$c.json" "logs/kld-$name-$c.json"
         nvfp4_upload "$NVFP4_LOGS/kld-$name-$c.log" "logs/kld-$name-$c.log"
+    done
+}
+
+# nvfp4_compare A B: paired per-window difference on every corpus
+nvfp4_compare() {
+    local a="${1:-}" b="${2:-}" c
+    [ -n "$a" ] && [ -n "$b" ] || { echo "nvfp4_compare NAME_A NAME_B"; return 1; }
+    nvfp4_write_py > /dev/null
+    for c in $(echo $NVFP4_CORPORA); do
+        [ -f "$NVFP4_LOGS/kld-$a-$c.json" ] && [ -f "$NVFP4_LOGS/kld-$b-$c.json" ] || { echo "$c: measure both first (nvfp4_kld $a ; nvfp4_kld $b)"; continue; }
+        echo "--- $c: $a - $b ---"
+        python3 "$NVFP4_TOOLS/nvfp4_compare.py" "$NVFP4_LOGS/kld-$a-$c.json" "$NVFP4_LOGS/kld-$b-$c.json"
     done
 }
 
@@ -573,38 +592,30 @@ for p in sorted(glob.glob(os.path.join(log, "kld-*.json"))):
         r = json.load(open(p))
     except Exception:
         continue
+    if "mean_kld_lb" not in r:
+        continue  # a file from the old estimator; re-run nvfp4_kld
     stem = os.path.basename(p)[4:-5]
     for c in corpora:
         if stem.endswith("-" + c):
             r["name"] = stem[: -len(c) - 1]
             rows.setdefault(c, []).append(r)
 if not rows:
-    print("nothing measured on this box yet"); sys.exit(0)
-topk = None
+    print("nothing measured on this box yet (or only old-estimator files: re-run nvfp4_kld)"); sys.exit(0)
 for c in corpora:
     if c not in rows:
         continue
     print()
-    print("corpus: %s" % c)
-    print("%-22s %10s %10s %10s %9s %9s %9s" % ("build", "KLD low", "KLD high", "median", "p99", "top-1 %", "ppl"))
+    print("corpus: %s   (reference ppl %.4f)" % (c, rows[c][0]["ref_ppl"]))
+    print("%-14s %-30s %10s %9s %-22s %8s %8s" % ("build", "KL lower bound [95% CI]", "median", "p99", "top-1 % [95% CI]", "ppl", "d ppl"))
     for r in rows[c]:
-        topk = r["topk"]
-        print("%-22s %10.6f %10.6f %10.6f %9.5f %9.2f %9.4f" % (
-            r["name"], r["mean_kld_low"], r["mean_kld_high"], r["median_kld"],
-            r["p99_kld"], r["top1_agree_pct"], r["quant_ppl"]))
-    rep = [r for r in rows[c] if r["name"] == "ref-repeat"]
-    if rep:
-        print("noise floor: reference against itself, KLD low %.6f, top-1 %.2f %%. Three times it is the"
-              % (rep[0]["mean_kld_low"], rep[0]["top1_agree_pct"]))
-        print("smallest defensible gap on this corpus.")
-    else:
-        print("noise floor not measured on this corpus yet: nvfp4_repeat")
+        print("%-14s %.5f [%.5f, %.5f]   %10.6f %9.5f %6.2f [%.2f, %.2f]   %8.4f %+7.3f%%" % (
+            r["name"], r["mean_kld_lb"], *r["mean_kld_lb_ci95"], r["median_kld"], r["p99_kld"],
+            r["top1_agree_pct"], *r["top1_ci95"], r["quant_ppl"], 100 * (r["quant_ppl"] / r["ref_ppl"] - 1)))
 print()
-print("KLD is reference || candidate over the reference's top-%d tokens plus a rest bucket." % topk)
-print("low  puts every reference token the candidate did not rank at the candidate's K-th probability,")
-print("high spreads the candidate's leftover mass uniformly over the rest of the vocabulary.")
-print("The truth is between the two. If they disagree by more than the gap you are trying to show,")
-print("raise NVFP4_TOPK and measure again; the exact columns are top-1 and ppl.")
+print("KL is a lower bound of KL(reference || candidate): exact on the top-%d tokens every run ranked, one" % rows[c][0]["topk"])
+print("bucket for the rest; no upper bound exists from top-K data. Intervals are bootstrap over windows of")
+print("2048 positions and cover the spread across the corpus, not across engine runs; a 'ref-repeat' row")
+print("is one sample of the run-to-run spread. Compare two builds with nvfp4_compare, not by eye.")
 cov = sorted(glob.glob(os.path.join(log, "coverage-*.json")))
 if cov:
     print()
@@ -965,86 +976,134 @@ if __name__ == "__main__":
 LPEOF
 
 cat > "$NVFP4_TOOLS/nvfp4_kld.py" << 'KLDEOF'
-"""Divergence of a candidate from the reference, from two top-K dumps.
+"""A guaranteed lower bound on KL(reference || candidate) from top-K dumps, with
+window-bootstrap intervals.
 
-    python3 nvfp4_kld.py REF.npz CAND.npz OUT.json
+    python3 nvfp4_kld.py REF.npz CAND.npz OUT.json [--also OTHER.npz ...]
 
-Both files come from nvfp4_logprobs.py on the same corpus, ctx and chunk count.
-Per scored position, with p the reference and q the candidate:
+All files come from nvfp4_logprobs.py on the same corpus, ctx and chunk count.
+Per scored position the reference's top-K token ids are known with exact p, the
+candidate's top-K with exact q. Take S = the reference's top-K ids that the
+candidate (and every --also run) also ranked, so p and q are exact on S, and
+put everything outside S into one bucket for both sides:
 
-    KLD(p || q) = sum over the reference's top-K of p_i * (log p_i - log q_i)
-                  + p_rest * (log p_rest - log q_rest)
+    KL_lb = sum_{i in S} p_i log(p_i / q_i) + p_rest log(p_rest / q_rest)
+    p_rest = 1 - sum_S p,   q_rest = 1 - sum_S q
 
-p_i and p_rest are known exactly. q_i is known when the candidate ranked token
-i in its own top-K. When it did not, q_i is somewhere below the candidate's
-K-th probability, and the file gives two numbers instead of pretending:
+Coarsening two distributions onto the same partition can only lower their KL
+(data-processing inequality), so KL_lb <= the true KL, and nothing else is
+claimed: there is no upper bound from top-K data, a token the candidate ranked
+below K can carry arbitrarily much divergence. The common-set mass is reported
+so the reader can see how much was coarsened (median 1.00000 on this model).
 
-    low   q_i = the candidate's K-th probability, the largest it can be
-    high  q_i = the candidate's leftover mass spread evenly over the rest of
-          the vocabulary, about the smallest plausible value
-
-The truth lies between. On a normal run the two agree to the third decimal,
-and the gap is reported so a reader can see when they do not. The exact
-columns, which need no bracket, are top-1 agreement and the perplexity of the
-tokens that were actually there.
+--also makes S the intersection over several candidates, so that two candidates
+measured against the same reference are coarsened identically and their
+per-window means can be paired (nvfp4_compare). Windows are the unit of
+resampling: a window is 2048 scored positions of one 4096-token chunk, the
+bootstrap draws windows with replacement, and the intervals are 95 % percentile
+intervals of the per-window mean. Positions are not independent; windows are
+treated as such. Run-to-run variation of the engine is NOT in these intervals:
+one run per candidate is one sample of it. The exact columns, top-1 agreement
+and perplexity of the tokens that were there, need no bound but carry the same
+window uncertainty.
 """
 import json, sys
 import numpy as np
 
-ref_p, cand_p, out = sys.argv[1:4]
-R, C = np.load(ref_p), np.load(cand_p)
-mr, mc = json.loads(str(R["meta"])), json.loads(str(C["meta"]))
-for k in ("corpus", "ctx", "chunks", "first_scored", "scored_positions"):
+args = sys.argv[1:]
+also = []
+if "--also" in args:
+    k = args.index("--also"); also = args[k + 1:]; args = args[:k]
+ref_p, cand_p, out = args
+B, rng = 20000, np.random.default_rng(0)
+
+def load(path):
+    z = np.load(path)
+    return z["top_ids"], z["top_lps"].astype(np.float64), z["tok_id"], z["tok_lp"].astype(np.float64), json.loads(str(z["meta"]))
+
+rid, rlp, rtok, rtok_lp, mr = load(ref_p)
+cid, clp, ctok, ctok_lp, mc = load(cand_p)
+for k in ("corpus", "ctx", "chunks", "first_scored", "scored_positions", "topk"):
     assert mr[k] == mc[k], "protocol mismatch on %s: %r vs %r" % (k, mr[k], mc[k])
-V, K = mr["vocab"], mr["topk"]
-n = mr["scored_positions"]
+assert (rtok == ctok).all(), "the two dumps scored different tokens"
+n, K = rid.shape
+L = mr["ctx"] - mr["first_scored"]; W = n // L
+assert W * L == n
 
-rid, rlp = R["top_ids"], R["top_lps"].astype(np.float64)
-cid, clp = C["top_ids"], C["top_lps"].astype(np.float64)
-tok, rtok_lp, ctok_lp = R["tok_id"], R["tok_lp"].astype(np.float64), C["tok_lp"].astype(np.float64)
-assert (tok == C["tok_id"]).all(), "the two dumps scored different tokens"
-
-kl_low = np.zeros(n); kl_high = np.zeros(n); missing_mass = np.zeros(n)
-top1 = 0
+# S: reference ids the candidate ranked, intersected with every --also run
+common = np.zeros((n, K), bool)
 for i in range(n):
-    p = np.exp(rlp[i]); p_rest = max(1.0 - p.sum(), 1e-12)
-    q_of = dict(zip(cid[i].tolist(), clp[i].tolist()))
-    q_k = clp[i][np.isfinite(clp[i])].min()          # candidate's K-th log prob
-    q_rest = max(1.0 - np.exp(clp[i]).sum(), 1e-12)
-    q_tail = np.log(q_rest / max(V - K, 1))
-    lq_low = np.empty(K); lq_high = np.empty(K); miss = 0.0
-    for j in range(K):
-        t = int(rid[i, j])
-        if t in q_of:
-            lq_low[j] = lq_high[j] = q_of[t]
-        else:
-            lq_low[j] = q_k; lq_high[j] = q_tail; miss += p[j]
-    term = p * (rlp[i] - lq_low); kl_low[i] = term.sum() + p_rest * (np.log(p_rest) - np.log(q_rest))
-    term = p * (rlp[i] - lq_high); kl_high[i] = term.sum() + p_rest * (np.log(p_rest) - np.log(q_rest))
-    missing_mass[i] = miss
-    top1 += int(rid[i, 0] == cid[i, 0])
+    common[i] = np.isin(rid[i], cid[i], assume_unique=True)
+for path in also:
+    oid = np.load(path)["top_ids"]
+    for i in range(n):
+        common[i] &= np.isin(rid[i], oid[i], assume_unique=True)
 
-kl = np.sort(kl_low)
-q = lambda f: float(kl[min(n - 1, int(n * f))])
+p = np.exp(rlp); pS = np.where(common, p, 0.0)
+q = np.zeros((n, K))
+for i in range(n):
+    m = common[i]
+    if m.any():
+        pos = {int(t): j for j, t in enumerate(cid[i])}
+        q[i, m] = np.exp(clp[i, [pos[int(t)] for t in rid[i, m]]])
+p_rest = np.clip(1.0 - pS.sum(1), 1e-12, 1.0)
+q_rest = np.clip(1.0 - q.sum(1), 1e-12, 1.0)
+with np.errstate(divide="ignore", invalid="ignore"):
+    term = np.where(common, pS * (np.log(pS) - np.log(q)), 0.0)
+kl = term.sum(1) + p_rest * (np.log(p_rest) - np.log(q_rest))
+top1 = (rid[:, 0] == cid[:, 0]).astype(float)
+mass = pS.sum(1)
+overshoot = np.exp(rlp).sum(1)  # float32 rounding can push the stored mass past 1
+
+wk, wt = kl.reshape(W, L).mean(1), top1.reshape(W, L).mean(1)
+idx = rng.integers(0, W, (B, W))
+bk, bt = wk[idx].mean(1), wt[idx].mean(1)
+srt = np.sort(kl); qv = lambda f: float(srt[min(n - 1, int(n * f))])
 res = {
-    "reference": ref_p, "candidate": cand_p, "topk": K, "scored_positions": n,
-    "mean_kld_low": float(kl_low.mean()), "mean_kld_high": float(kl_high.mean()),
-    "median_kld": q(.50), "p90_kld": q(.90), "p95_kld": q(.95), "p99_kld": q(.99), "max_kld": float(kl[-1]),
-    "top1_agree_pct": 100.0 * top1 / n,
+    "reference": ref_p, "candidate": cand_p, "coarsening_runs": sorted([cand_p] + also),
+    "topk": K, "scored_positions": n, "windows": W,
+    "mean_kld_lb": float(wk.mean()), "mean_kld_lb_ci95": [float(np.percentile(bk, 2.5)), float(np.percentile(bk, 97.5))],
+    "median_kld": qv(.50), "p90_kld": qv(.90), "p95_kld": qv(.95), "p99_kld": qv(.99), "max_kld": float(srt[-1]),
+    "top1_agree_pct": 100.0 * float(wt.mean()), "top1_ci95": [100.0 * float(np.percentile(bt, 2.5)), 100.0 * float(np.percentile(bt, 97.5))],
     "ref_ppl": float(np.exp(-rtok_lp.mean())), "quant_ppl": float(np.exp(-ctok_lp.mean())),
     "mean_abs_dlogprob_actual": float(np.abs(rtok_lp - ctok_lp).mean()),
-    "missing_mass_mean": float(missing_mass.mean()), "missing_mass_max": float(missing_mass.max()),
-    "ref_topk_mass_mean": float(np.exp(rlp).sum(axis=1).mean()),
+    "common_mass_median": float(np.median(mass)), "common_mass_p1": float(np.percentile(mass, 1)), "common_mass_min": float(mass.min()),
+    "stored_mass_max": float(overshoot.max()), "rows_mass_over_1e-4": int((overshoot > 1 + 1e-4).sum()),
+    "window_kld": wk.tolist(), "window_top1": wt.tolist(),
 }
 json.dump(res, open(out, "w"), indent=2)
-print("mean KLD      : %.6f .. %.6f   (low .. high bracket, see docstring)" % (res["mean_kld_low"], res["mean_kld_high"]))
-print("median KLD    : %.6f     p90 %.6f  p95 %.6f  p99 %.6f  max %.4f" % (res["median_kld"], res["p90_kld"], res["p95_kld"], res["p99_kld"], res["max_kld"]))
-print("same top-1    : %.3f %%" % res["top1_agree_pct"])
-print("ppl           : reference %.4f   candidate %.4f" % (res["ref_ppl"], res["quant_ppl"]))
-print("|d logprob|   : %.5f on the actual tokens" % res["mean_abs_dlogprob_actual"])
-print("unseen mass   : mean %.2e  max %.2e of reference top-%d not ranked by the candidate" % (res["missing_mass_mean"], res["missing_mass_max"], K))
+print("KL lower bound : %.6f   95%% CI over %d windows [%.6f, %.6f]" % (res["mean_kld_lb"], W, *res["mean_kld_lb_ci95"]))
+print("median KLD     : %.6f     p90 %.6f  p95 %.6f  p99 %.6f  max %.4f" % (res["median_kld"], res["p90_kld"], res["p95_kld"], res["p99_kld"], res["max_kld"]))
+print("same top-1     : %.3f %%   [%.3f, %.3f]" % (res["top1_agree_pct"], *res["top1_ci95"]))
+print("ppl            : reference %.4f   candidate %.4f   (%+.3f %%)" % (res["ref_ppl"], res["quant_ppl"], 100 * (res["quant_ppl"] / res["ref_ppl"] - 1)))
+print("|d logprob|    : %.5f on the actual tokens" % res["mean_abs_dlogprob_actual"])
+print("common set     : mass median %.5f  p1 %.5f  min %.4f   (coarsened with %d run(s))" % (res["common_mass_median"], res["common_mass_p1"], res["common_mass_min"], len(res["coarsening_runs"])))
+print("normalization  : stored top-K mass max %.7f, rows past 1+1e-4: %d" % (res["stored_mass_max"], res["rows_mass_over_1e-4"]))
 print("written to %s" % out)
 KLDEOF
+
+cat > "$NVFP4_TOOLS/nvfp4_compare.py" << 'CMPEOF'
+"""Paired difference of two candidates measured against the same reference.
+
+    python3 nvfp4_compare.py A.json B.json
+
+Both come from nvfp4_kld.py with the same coarsening set (pass every candidate
+as --also to each), so the per-window means are comparable. d_w = A_w - B_w
+over windows, bootstrap over windows, 95 % percentile interval, and the share
+of resamples with d > 0. An interval that contains 0 means no convincing
+difference was found; it does not mean the two are equivalent.
+"""
+import json, sys
+import numpy as np
+a, b = (json.load(open(p)) for p in sys.argv[1:3])
+assert a["coarsening_runs"] == b["coarsening_runs"], "the two were not coarsened on the same set; rerun nvfp4_kld with --also"
+rng = np.random.default_rng(0); B = 20000
+for key, label, scale in (("window_kld", "KL lower bound", 1.0), ("window_top1", "top-1 agreement, points", 100.0)):
+    d = (np.array(a[key]) - np.array(b[key])) * scale; W = len(d)
+    s = d[rng.integers(0, W, (B, W))].mean(1)
+    print("%-26s A - B = %+.5f   95%% CI [%+.5f, %+.5f]   P(A > B) = %.3f   over %d windows" % (label, d.mean(), np.percentile(s, 2.5), np.percentile(s, 97.5), (s > 0).mean(), W))
+print("ppl: A %.4f  B %.4f  reference %.4f" % (a["quant_ppl"], b["quant_ppl"], a["ref_ppl"]))
+CMPEOF
 
 echo "helpers written to $NVFP4_TOOLS"
 }
