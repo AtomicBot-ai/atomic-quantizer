@@ -1,0 +1,88 @@
+# Dense hybrid (Gated DeltaNet + full attention), the Qwen3.5 / Qwen3.8 dense line.
+#
+# This is the ladder that produced AtomicChat/Qwen3.8-27B-GGUF in August 2026
+# (foundry.sh write_ladder), rewritten as roles. Two things changed on purpose:
+#   - every pattern is anchored. The old unanchored rules also hit other
+#     tensors (output= hit attn_output, attn_q= hit attn_qkv). Those side
+#     effects are part of the measured files, so they are kept, but as explicit
+#     roles (attn_q covers attn_qkv, attn_output takes the output type).
+#   - the MTP block is always pinned first. The August files pinned it only on
+#     the low rungs because of a since fixed bug in foundry.sh quantize.
+#
+# Bands are fractions of the blocks that carry ffn_down, MTP block excluded.
+# On the 64 blocks of Qwen3.8-27B they are exactly the August layout: edge =
+# first 4 and last 12, mid = the 8 after the head (write_ladder comment: edge
+# weighting halves the divergence at one size class). As fractions they scale
+# to another depth instead of lifting every block of a small model.
+name: dense-hybrid
+about: Qwen3.5/3.8 dense hybrid, 16 rungs from Q8_0 down to AD-IQ1_M
+ftype: Q8_0
+file_type_from: ffn_up
+
+bands:
+  group: '^blk\.\d+\.ffn_down\.weight$'
+  head_frac: 0.0625   # 4 of 64
+  tail_frac: 0.1875   # 12 of 64
+  mid_frac: 0.125     # 8 of 64
+
+mtp:
+  type: q5_k
+
+roles:
+  - {name: edge_ffn,   pattern: '^blk\.{edge}\.ffn_(down|gate|up)\.weight$'}
+  - {name: mid_ffn,    pattern: '^blk\.{mid}\.ffn_(down|gate|up)\.weight$'}
+  - {name: ffn_down,   pattern: '^blk\.\d+\.ffn_down\.weight$'}
+  - {name: ffn_gate,   pattern: '^blk\.\d+\.ffn_gate\.weight$'}
+  - {name: ffn_up,     pattern: '^blk\.\d+\.ffn_up\.weight$'}
+  - {name: attn_q,     pattern: '^blk\.\d+\.attn_(q|qkv)\.weight$'}
+  - {name: attn_gate,  pattern: '^blk\.\d+\.attn_gate\.weight$'}
+  - {name: ssm_out,    pattern: '^blk\.\d+\.ssm_out\.weight$'}
+  - {name: output,     pattern: '^output\.weight$'}
+  - {name: attn_output, pattern: '^blk\.\d+\.attn_output\.weight$', same_as: output}
+  - {name: token_embd, pattern: '^token_embd\.weight$'}
+
+# may take the positional type: small, and q8_0 on every rung by design
+allow_fallback:
+  - '^blk\.\d+\.attn_(k|v)\.weight$'
+  - '^blk\.\d+\.ssm_(alpha|beta)\.weight$'
+
+rungs:
+  - label: Q8_0
+    uniform: true
+    types: {}
+  # above 24 GB
+  - label: AD-Q6_K
+    types: {edge_ffn: q8_0, ffn_down: q6_k, ffn_gate: q6_k, ffn_up: q6_k, attn_q: q6_k, attn_gate: q8_0, ssm_out: q8_0, output: q8_0, token_embd: q8_0}
+  # 32 GB card
+  - label: AD-Q6_K-Q5_K
+    types: {edge_ffn: q8_0, mid_ffn: q6_k, ffn_down: q6_k, ffn_gate: q5_k, ffn_up: q5_k, attn_q: q5_k, attn_gate: q8_0, ssm_out: q8_0, output: q8_0, token_embd: q5_k}
+  - label: AD-Q5_K_M
+    types: {edge_ffn: q6_k, mid_ffn: q6_k, ffn_down: q5_k, ffn_gate: q5_k, ffn_up: q5_k, attn_q: q5_k, attn_gate: q6_k, ssm_out: q6_k, output: q6_k, token_embd: q4_k}
+  # 24 GB card
+  - label: AD-Q5_K_M-Q4_K_M
+    types: {edge_ffn: q6_k, mid_ffn: q5_k, ffn_down: q5_k, ffn_gate: q4_k, ffn_up: q4_k, attn_q: q4_k, attn_gate: q6_k, ssm_out: q6_k, output: q6_k, token_embd: iq4_xs}
+  - label: AD-Q4_K_M
+    types: {edge_ffn: q5_k, mid_ffn: q5_k, ffn_down: q4_k, ffn_gate: q4_k, ffn_up: q4_k, attn_q: q4_k, attn_gate: q5_k, ssm_out: q5_k, output: q6_k, token_embd: iq4_xs}
+  # 16 GB card
+  - label: AD-IQ4_XS
+    types: {edge_ffn: q5_k, mid_ffn: q4_k, ffn_down: q4_k, ffn_gate: iq4_xs, ffn_up: iq4_xs, attn_q: iq4_xs, attn_gate: q5_k, ssm_out: q5_k, output: q6_k, token_embd: iq4_xs}
+  - label: AD-IQ4_XS-IQ3_S
+    types: {edge_ffn: q4_k, mid_ffn: iq4_xs, ffn_down: iq4_xs, ffn_gate: iq3_s, ffn_up: iq3_s, attn_q: iq4_xs, attn_gate: q4_k, ssm_out: q4_k, output: q5_k, token_embd: iq4_xs}
+  - label: AD-IQ3_S
+    types: {edge_ffn: iq4_xs, mid_ffn: iq4_xs, ffn_down: iq3_s, ffn_gate: iq3_s, ffn_up: iq3_s, attn_q: iq4_xs, attn_gate: iq4_xs, ssm_out: iq4_xs, output: q5_k, token_embd: iq4_xs}
+  # 12 GB card
+  - label: AD-IQ3_S-IQ3_XXS
+    types: {edge_ffn: iq4_xs, mid_ffn: iq3_s, ffn_down: iq3_s, ffn_gate: iq3_xxs, ffn_up: iq3_xxs, attn_q: iq3_s, attn_gate: iq4_xs, ssm_out: iq4_xs, output: q5_k, token_embd: iq4_xs}
+  - label: AD-IQ3_XXS
+    types: {edge_ffn: iq3_s, mid_ffn: iq3_s, ffn_down: iq3_xxs, ffn_gate: iq3_xxs, ffn_up: iq3_xxs, attn_q: iq3_s, attn_gate: iq3_s, ssm_out: iq3_s, output: q5_k, token_embd: iq4_xs}
+  - label: AD-IQ2_S
+    types: {edge_ffn: iq3_s, mid_ffn: iq3_xxs, ffn_down: iq2_s, ffn_gate: iq2_s, ffn_up: iq2_s, attn_q: iq3_xxs, attn_gate: iq3_s, ssm_out: iq3_s, output: q5_k, token_embd: iq4_xs}
+  # 8 to 10 GB
+  - label: AD-IQ2_S-IQ2_XS
+    types: {edge_ffn: iq3_xxs, mid_ffn: iq2_s, ffn_down: iq2_s, ffn_gate: iq2_xs, ffn_up: iq2_xs, attn_q: iq3_xxs, attn_gate: iq3_xxs, ssm_out: iq3_xxs, output: q4_k, token_embd: iq4_xs}
+  - label: AD-IQ2_XS
+    types: {edge_ffn: iq3_xxs, mid_ffn: iq2_s, ffn_down: iq2_xs, ffn_gate: iq2_xs, ffn_up: iq2_xs, attn_q: iq2_s, attn_gate: iq3_xxs, ssm_out: iq3_xxs, output: q4_k, token_embd: iq4_xs}
+  - label: AD-IQ2_XXS
+    types: {edge_ffn: iq2_s, mid_ffn: iq2_xs, ffn_down: iq2_xxs, ffn_gate: iq2_xxs, ffn_up: iq2_xxs, attn_q: iq2_s, attn_gate: iq2_s, ssm_out: iq2_s, output: iq4_xs, token_embd: iq4_xs}
+  - label: AD-IQ1_M
+    types: {edge_ffn: iq2_xs, mid_ffn: iq2_xxs, ffn_down: iq2_xxs, ffn_gate: iq1_m, ffn_up: iq1_m, attn_q: iq2_s, attn_gate: iq2_s, ssm_out: iq2_s, output: iq4_xs, token_embd: iq4_xs}

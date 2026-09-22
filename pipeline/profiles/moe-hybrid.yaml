@@ -1,0 +1,72 @@
+# MoE hybrid: routed experts + shared expert, attention and/or recurrent blocks.
+#
+# This is the ladder that produced AtomicChat/Ling-3.0-flash-GGUF in August
+# 2026 (recipes/*.txt in Ling-3.0-flash-GGUF-metrics code/box1-scripts.tar.gz),
+# rewritten as roles. The experts are ~97% of the weights, so only they move
+# from rung to rung; everything else stays q8_0 and costs a few GB.
+#
+# Rung rule: ffn_down_exps one step above ffn_gate/up_exps, the edge blocks one
+# or two steps above the middle. Edge = first 2 and last 3 of the blocks that
+# carry experts (Ling has 2 dense blocks in front). The positional ftype is the
+# nearest stock preset, so every tensor must be covered by a rule or a flag.
+#
+# Before using this on a new MoE model, read the refusals of ladder_gen.py:
+#   - rows not a multiple of 256 (e.g. moe_intermediate_size 640 on
+#     Qwen3.8-Flash-Next) take only block-32 types (q4_0..q8_0, iq4_nl, mxfp4);
+#   - --token-embedding-type also hits per_layer_token_embd (the n-gram table),
+#     so a model with that table wants token_embd set by a rule instead;
+#   - edge bands were placed by imatrix energy on Flash-Next (0-3 and 40-47),
+#     count-based bands are the starting point, not the answer.
+name: moe-hybrid
+about: MoE hybrid, 21 AD rungs from AD-Q8_0 down to AD-IQ1_S plus two flat controls
+
+bands:
+  group: '^blk\.\d+\.ffn_down_exps\.weight$'
+  head: 2
+  tail: 3
+  mid: 0
+
+mtp:
+  type: q8_0
+
+flags:
+  output_tensor_type: f16
+  token_embedding_type: q8_0
+
+roles:
+  - {name: edge_down_exps,    pattern: '^blk\.{edge}\.ffn_down_exps\.weight$'}
+  - {name: edge_gate_up_exps, pattern: '^blk\.{edge}\.ffn_(gate|up)_exps\.weight$'}
+  - {name: down_exps,         pattern: '^blk\.\d+\.ffn_down_exps\.weight$'}
+  - {name: gate_up_exps,      pattern: '^blk\.\d+\.ffn_(gate|up)_exps\.weight$'}
+  - {name: shexp,             pattern: '^blk\.\d+\.ffn_(gate|down|up)_shexp\.weight$'}
+  - {name: dense_ffn,         pattern: '^blk\.\d+\.ffn_(gate|down|up)\.weight$'}
+  - {name: attn,              pattern: '^blk\.\d+\.attn_\w+\.weight$'}
+  - {name: ssm,               pattern: '^blk\.\d+\.ssm_\w+\.weight$'}
+
+defaults: {shexp: q8_0, dense_ffn: q8_0, attn: q8_0, ssm: q8_0}
+
+rungs:
+  - {label: AD-Q8_0,    ftype: Q8_0,    flags: {token_embedding_type: f16}, types: {edge_down_exps: q8_0, edge_gate_up_exps: q8_0, down_exps: q8_0, gate_up_exps: q8_0}}
+  - {label: AD-Q6_K,    ftype: Q6_K,    flags: {token_embedding_type: f16}, types: {edge_down_exps: q8_0, edge_gate_up_exps: q8_0, down_exps: q6_k, gate_up_exps: q6_k}}
+  - {label: AD-Q5_K_L,  ftype: Q5_K_M,  types: {edge_down_exps: q8_0,   edge_gate_up_exps: q6_k,   down_exps: q6_k,    gate_up_exps: q5_k}}
+  - {label: AD-Q5_K_M,  ftype: Q5_K_M,  types: {edge_down_exps: q6_k,   edge_gate_up_exps: q6_k,   down_exps: q5_k,    gate_up_exps: q5_k}}
+  - {label: AD-Q5_K_S,  ftype: Q5_K_S,  types: {edge_down_exps: q5_k,   edge_gate_up_exps: q5_k,   down_exps: q5_k,    gate_up_exps: q5_k}}
+  - {label: AD-Q4_K_L,  ftype: Q4_K_M,  types: {edge_down_exps: q6_k,   edge_gate_up_exps: q5_k,   down_exps: q6_k,    gate_up_exps: q4_k}}
+  - {label: AD-Q4_K_M,  ftype: Q4_K_M,  types: {edge_down_exps: q6_k,   edge_gate_up_exps: q5_k,   down_exps: q5_k,    gate_up_exps: q4_k}}
+  - {label: AD-IQ4_NL,  ftype: IQ4_NL,  types: {edge_down_exps: q6_k,   edge_gate_up_exps: q5_k,   down_exps: q5_k,    gate_up_exps: iq4_nl}}
+  - {label: AD-IQ4_XS,  ftype: IQ4_XS,  types: {edge_down_exps: q5_k,   edge_gate_up_exps: iq4_xs, down_exps: q5_k,    gate_up_exps: iq4_xs}}
+  - {label: AD-Q4_K_S,  ftype: Q4_K_S,  types: {edge_down_exps: q5_k,   edge_gate_up_exps: q5_k,   down_exps: q4_k,    gate_up_exps: q4_k}}
+  - {label: AD-IQ4_XXS, ftype: IQ4_XS,  types: {edge_down_exps: q5_k,   edge_gate_up_exps: iq4_xs, down_exps: iq4_xs,  gate_up_exps: iq4_xs}}
+  - {label: AD-IQ3_M,   ftype: IQ3_M,   types: {edge_down_exps: q5_k,   edge_gate_up_exps: iq4_xs, down_exps: iq4_xs,  gate_up_exps: iq3_s}}
+  - {label: AD-IQ3_S,   ftype: IQ3_S,   types: {edge_down_exps: iq4_xs, edge_gate_up_exps: iq4_xs, down_exps: iq3_s,   gate_up_exps: iq3_s}}
+  - {label: AD-IQ3_XXS, ftype: IQ3_XXS, types: {edge_down_exps: iq4_xs, edge_gate_up_exps: iq3_s,  down_exps: iq4_xs,  gate_up_exps: iq3_xxs}}
+  - {label: AD-IQ2_M,   ftype: IQ2_M,   types: {edge_down_exps: iq4_xs, edge_gate_up_exps: iq3_s,  down_exps: iq3_s,   gate_up_exps: iq2_s}}
+  - {label: AD-IQ2_S,   ftype: IQ2_S,   types: {edge_down_exps: iq3_s,  edge_gate_up_exps: iq3_s,  down_exps: iq3_xxs, gate_up_exps: iq2_s}}
+  - {label: AD-IQ2_XS,  ftype: IQ2_XS,  types: {edge_down_exps: iq3_s,  edge_gate_up_exps: iq3_s,  down_exps: iq3_xxs, gate_up_exps: iq2_xs}}
+  - {label: AD-IQ2_XXS, ftype: IQ2_XXS, types: {edge_down_exps: iq3_s,  edge_gate_up_exps: iq2_s,  down_exps: iq2_s,   gate_up_exps: iq2_xxs}}
+  - {label: AD-IQ1_M,   ftype: IQ1_M,   types: {edge_down_exps: iq3_s,  edge_gate_up_exps: iq2_s,  down_exps: iq2_s,   gate_up_exps: iq1_m}}
+  - {label: AD-IQ1_S,   ftype: IQ1_S,   types: {edge_down_exps: iq3_xxs, edge_gate_up_exps: iq2_s, down_exps: iq2_xxs, gate_up_exps: iq1_s}}
+  - {label: AD-NVFP4,   ftype: NVFP4,   types: {edge_down_exps: nvfp4,  edge_gate_up_exps: nvfp4,  down_exps: nvfp4,   gate_up_exps: nvfp4}}
+  # controls: same bit budget, no edge weighting. Built to attribute a gain to the layout, not published by default.
+  - {label: Q4_K_FLAT,   ftype: Q4_K_S, control: true, types: {edge_down_exps: q4_k,   edge_gate_up_exps: q4_k,   down_exps: q4_k,   gate_up_exps: q4_k}}
+  - {label: IQ4_XS_FLAT, ftype: IQ4_XS, control: true, types: {edge_down_exps: iq4_xs, edge_gate_up_exps: iq4_xs, down_exps: iq4_xs, gate_up_exps: iq4_xs}}
