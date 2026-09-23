@@ -137,3 +137,12 @@ paths to GitHub are cached and can hand back a copy that is minutes old, and
 `selfcheck` verifies that every function the help text advertises actually
 exists. Editing a large shell file by cutting between two function names quietly
 eats whatever sat between them, and this is what catches that.
+
+## `bonsai/`
+
+Refusal ablation for PrismML's Ternary Bonsai 2 27B. `abliterate.py` cannot be used there:
+the pack is ternary, and a dense weight edit rounds away when written back. These tools
+build the same projection as a rank-1 LoRA that llama.cpp keeps in the graph, verify it
+inside the running model, and measure what it costs. Nine files, all of them run from the
+repository root against a local pack; see
+[runbook-bonsai-abliterate.md](../docs/runbook-bonsai-abliterate.md).
