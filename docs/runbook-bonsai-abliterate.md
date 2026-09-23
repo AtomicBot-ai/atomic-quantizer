@@ -153,7 +153,9 @@ mathematics, which scores as compliance.
 
 ## What was not covered
 
-Only `PTQ1_0` was run; `PQ2_0` and the F16 pack carry the same tensor names and values, so
-the adapter should apply, but that is untested. Capability was checked with MMLU alone.
+The F16 pack was not run. `PTQ1_0` and `PQ2_0` both were, with the same adapter file:
+identical metadata, both decoders bit-exact against F16, an adapter rebuilt from `PQ2_0`
+bit-identical to the one from `PTQ1_0`, the same leak figures, and all 416 greedy replies of
+the refusal evaluation byte-identical across the two packs. Capability was checked with MMLU alone.
 Directions come from one prompt-pair source at one token position, so transfer to other
 phrasings and languages is unmeasured beyond spot checks.
