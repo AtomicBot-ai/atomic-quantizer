@@ -3,7 +3,13 @@
 The published `AtomicChat/Qwen3.8-27B-GGUF` is the answer key. Everything goes
 to `-rehearsal` repos, private; the public repos are not touched.
 
-## 0. Smoke on a 2B (~40 min, ~$1)
+## 0a. Locally, free (~1 h on a laptop CPU)
+
+The same driver and nodes in a Docker container, our repos as folders, nothing
+rented; see README "A free run on this machine". Rerun the command: every stage
+must be skipped.
+
+## 0b. Smoke on a 2B (~40 min, ~$1)
 
 ```bash
 python driver/release.py gguf --model Qwen/Qwen3.5-2B --recipe qwen3.8-27b --profile dense-hybrid \
@@ -27,8 +33,13 @@ python driver/release.py gguf --model Qwen/Qwen3.8-27B --recipe qwen3.8-27b --pr
 
 ## 2. Acceptance
 
-Compare `AtomicChat/Qwen3.8-27B-GGUF-metrics-rehearsal/results.json` with the
-August table:
+```bash
+python tests/acceptance_qwen38.py --metrics AtomicChat/Qwen3.8-27B-GGUF-metrics-rehearsal \
+    --imatrix <rehearsal imatrix.gguf> --imatrix-ref <August imatrix/imatrix.gguf>
+```
+
+It reads the August KLD and quantize logs at the pinned metrics revision and
+checks the rehearsal's `results.json` against them:
 
 | rung | August mean KLD |
 |---|---|
@@ -49,11 +60,15 @@ August table:
 | AD-IQ2_XXS | 0.256633 |
 | AD-IQ1_M | 0.342121 |
 
-- every rung within 10% of August, top-1 within 0.3 points;
+- every rung within 10% of August (or 0.0001 absolute, the noise floor at Q8_0),
+  top-1 within 0.3 points, size within 2% of the August quantize log;
 - every `logs/verify-*.txt` says ok (types, overrides, no fallbacks, commit);
-- the new imatrix against the August one: `calib-corpora/tools/imcompare.py`,
-  496 common entries, per tensor cosine >= 0.99;
+- with `--imatrix/--imatrix-ref`: per tensor cosine of the mean squared
+  activations >= 0.99 over the common entries (496 on this model);
 - the self-check in `logs/kld-selfcheck.log` is exactly 0.
+
+`python -m pytest tests/test_acceptance.py` proves the script passes August
+against itself and fails a 20% KLD drift, a 5% size drift and a missing rung.
 
 Expected differences: the MTP block is pinned to q5_k on every rung now (8 of
 the August rungs quantized it at the rung types), and `general.file_type` now

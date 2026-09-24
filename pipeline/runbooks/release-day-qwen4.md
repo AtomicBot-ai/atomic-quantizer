@@ -79,5 +79,9 @@ without the checkpoint being wrong.
 - `release.py status` for every model: all stages done.
 - `results.json`: KLD grows monotonically as size shrinks; no row without a size.
 - `release.py reap`: no box left running.
-- Model cards: written by hand for now (see README, not done yet).
+- Model card: `gguf` ends with the draft (`card/README.draft.md` in the metrics
+  repo, and README.md in the main repo if it had none). The stage prints what is
+  left for a person: the chart, comparisons with other builds, findings, speed,
+  the vision demo. Edit the README on the hub; `release.py card --card-overwrite`
+  regenerates it from scratch.
 - Flip the repos to public.
