@@ -48,23 +48,37 @@ PY
 [ -n "$RUNG_TABLE" ] || fail 1 "no rungs selected (RUNGS='${RUNGS:-}')"
 
 IMATRIX=$WORK/imatrix/imatrix.gguf
-if echo "$RUNG_TABLE" | cut -d'|' -f4 | grep -q 1 && [ ! -f "$IMATRIX" ]; then
+# (no grep -q in a pipe: under pipefail the writer's SIGPIPE would turn a match into a miss)
+if [[ "$(cut -d'|' -f4 <<< "$RUNG_TABLE")" == *1* ]] && [ ! -f "$IMATRIX" ]; then
     hf_get "$METRICS" dataset - "imatrix/imatrix.gguf" "$WORK" || fail 1 "no imatrix in $METRICS"
 fi
 
 BASE=$WORK/kld/base-$EVALSET.kld
-if [ "$KLD" = 1 ] && [ ! -f "$BASE" ]; then
+KLD_ARGS=()
+if [ "$KLD" = 1 ]; then
     ensure_eval
-    hf_get "$METRICS" dataset - "kld/base-$EVALSET*" "$WORK/kld/dl" || fail 1 "no KLD reference in $METRICS"
-    if ls "$WORK"/kld/dl/kld/base-$EVALSET.kld.*.part >/dev/null 2>&1; then
-        cat "$WORK"/kld/dl/kld/base-$EVALSET.kld.*.part > "$BASE"
-    else
-        mv "$WORK/kld/dl/kld/base-$EVALSET.kld" "$BASE"
+    # the measurement repeats the reference's protocol exactly, whatever this node's env says
+    MANIFEST=$WORK/kld/dl/kld/base-$EVALSET.manifest.txt
+    hf_get "$METRICS" dataset - "kld/base-$EVALSET.manifest.txt" "$WORK/kld/dl" || fail 1 "no KLD reference in $METRICS"
+    CTX=$(awk '$1=="context"{print $2}' "$MANIFEST")
+    KLD_CHUNKS=$(awk '$1=="chunks"{print $2}' "$MANIFEST"); KLD_CHUNKS=${KLD_CHUNKS:-0}
+    WANT_SHA=$(awk '$1=="eval_sha256"{print $2}' "$MANIFEST")
+    [ -z "$WANT_SHA" ] || [ "$(sha256sum "$EVAL" | cut -d' ' -f1)" = "$WANT_SHA" ] \
+        || fail 1 "eval corpus differs from the one the reference was measured on"
+    # shellcheck disable=SC2207
+    KLD_ARGS=(-c "$CTX" $(kld_chunk_args))
+    if [ ! -f "$BASE" ]; then
+        hf_get "$METRICS" dataset - "kld/base-$EVALSET.kld*" "$WORK/kld/dl"
+        if ls "$WORK"/kld/dl/kld/base-$EVALSET.kld.*.part >/dev/null 2>&1; then
+            cat "$WORK"/kld/dl/kld/base-$EVALSET.kld.*.part > "$BASE"
+        else
+            mv "$WORK/kld/dl/kld/base-$EVALSET.kld" "$BASE"
+        fi
+        rm -rf "$WORK"/kld/dl/kld/base-$EVALSET.kld*
     fi
-    WANT=$(awk '/size_bytes/{print $2}' "$WORK/kld/dl/kld/base-$EVALSET.manifest.txt")
-    [ "$(stat -c %s "$BASE")" = "$WANT" ] || fail 1 "reassembled reference is $(stat -c %s "$BASE") bytes, manifest says $WANT"
+    WANT=$(awk '$1=="size_bytes"{print $2}' "$MANIFEST")
+    [ "$(stat -c %s "$BASE")" = "$WANT" ] || fail 1 "reference is $(stat -c %s "$BASE") bytes, manifest says $WANT"
 fi
-[ "$KLD" = 1 ] && ensure_eval
 
 has_quant() { hf_has "$MAIN" model "$1.gguf" || hf_has "$MAIN" model "$1-00001-of-*.gguf"; }
 
@@ -98,7 +112,7 @@ while IFS='|' read -r LABEL FTYPE FILE_TYPE USE_IM FLAGS; do
     if [ "$KLD" = 1 ]; then
         say "$LABEL: KLD"
         stdbuf -oL -eL "$BIN/llama-perplexity" -m "$OUT" -f "$EVAL" --kl-divergence-base "$BASE" --kl-divergence \
-            -c "$CTX" -ngl 99 > "$KLOG" 2>&1 || { push_log "$KLOG"; fail 1 "$LABEL: KLD run failed"; }
+            "${KLD_ARGS[@]}" -ngl $NGL > "$KLOG" 2>&1 || { push_log "$KLOG"; fail 1 "$LABEL: KLD run failed"; }
         "$PY" "$PIPE/lib/results.py" row --name "$NAME" --label "$LABEL" --kld "$KLOG" --quant-log "$QLOG" \
             --size-bytes "$SIZE" ${FILE_TYPE:+--file-type "$FILE_TYPE"} --commit "$(cat "$LOGS/llama-commit.txt")" \
             --evalset "$EVALSET" -o "$WORK/results/rows/$NAME.json"

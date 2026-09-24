@@ -18,18 +18,34 @@ import quantlog  # noqa: E402
 
 KV_ARCH = re.compile(r"general\.architecture\s+str\s+=\s+(\S+)")
 KV_BLOCKS = re.compile(r"(\w+)\.block_count\s+u32\s+=\s+(\d+)")
+KV_LINE = re.compile(r"- kv\s+\d+:\s+(\S+)\s+(u8|i8|u16|i16|u32|i32|u64|i64|f32|f64|bool|str)\s+=\s+(.*)$", re.M)
+
+
+def keep_meta(key):
+    """Scalar hyperparameters for the model card; the tokenizer tables stay out."""
+    return not key.startswith(("tokenizer.", "split.")) or key == "tokenizer.ggml.model"
+
+
+def scalar(typ, raw):
+    raw = raw.strip()
+    if typ == "str":
+        return raw
+    if typ == "bool":
+        return raw == "true"
+    return float(raw) if typ.startswith("f") else int(raw)
 
 
 def mtp_blocks(names):
     return sorted({int(m.group(1)) for n in names if (m := re.match(r"blk\.(\d+)\.nextn\.", n))})
 
 
-def finish(arch, block_count, tensors, source):
+def finish(arch, block_count, tensors, source, meta=None):
     return {
         "source": source,
         "arch": arch,
         "block_count": block_count,
         "mtp_blocks": mtp_blocks([t["name"] for t in tensors]),
+        "meta": meta or {},
         "tensors": tensors,
     }
 
@@ -44,7 +60,8 @@ def from_log(path):
         if a == arch:
             blocks = int(n)
     tensors = [{"name": n, "type": t["src"], "shape": t["shape"]} for n, t in log["tensors"].items()]
-    return finish(arch, blocks, tensors, os.path.basename(path))
+    meta = {k: scalar(t, v) for k, t, v in KV_LINE.findall(text) if keep_meta(k)}
+    return finish(arch, blocks, tensors, os.path.basename(path), meta)
 
 
 def from_gguf(path):
@@ -70,12 +87,21 @@ def from_gguf(path):
         if not m:
             raise SystemExit(f"{path}: split.count={split_count} but the name is not -NNNNN-of-NNNNN.gguf")
         paths = [f"{m.group(1)}-{i:05d}-of-{m.group(3)}.gguf" for i in range(1, split_count + 1)]
+    meta = {}
+    for key, f in r.fields.items():
+        if not keep_meta(key) or len(f.types) != 1 or f.types[0].name == "ARRAY":
+            continue
+        try:
+            meta[key] = f.contents() if hasattr(f, "contents") else field(key)
+        except Exception:  # an odd field must not stop the inventory
+            pass
+    meta["tokenizer.chat_template"] = "tokenizer.chat_template" in r.fields
     tensors = []
     for p in paths:
         for t in (r if p == path else GGUFReader(p)).tensors:
             shape = [int(x) for x in t.shape] + [1] * (4 - len(t.shape))
             tensors.append({"name": t.name, "type": t.tensor_type.name.lower(), "shape": shape})
-    return finish(arch, int(blocks) if blocks is not None else None, tensors, os.path.basename(path))
+    return finish(arch, int(blocks) if blocks is not None else None, tensors, os.path.basename(path), meta)
 
 
 def main():

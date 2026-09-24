@@ -50,7 +50,7 @@ SENT=""
 trap 'rc=$?; if [ -z "$SENT" ] && [ $rc -ne 0 ]; then echo "NODE_FAIL node_abliterate unexpected exit $rc near line $LINENO"; fi' EXIT
 
 # ── быстрый выход: не жечь часы, если результат уже на HF ─────────────────────
-if [ "$UPLOAD" = 1 ] && [ "$FORCE" != 1 ] && hf_api "models/$TARGET/tree/main" 2>/dev/null | grep -q '"path":"config.json"'; then
+if [ "$UPLOAD" = 1 ] && [ "$FORCE" != 1 ] && [[ "$(hf_api "models/$TARGET/tree/main" 2>/dev/null || true)" == *'"path":"config.json"'* ]]; then
   echo "в $TARGET уже есть config.json — узел не нужен, выходим (FORCE=1 чтобы пересчитать)"
   SENT=1; echo "NODE_DONE node_abliterate {\"skipped\": true}"; exit 0
 fi

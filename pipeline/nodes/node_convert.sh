@@ -19,13 +19,9 @@ hf_ensure "$MAIN" model
 
 SRC=$WORK/src
 say "downloading $MODEL ${MODEL_REV:+@ $MODEL_REV}"
-hf_get "$MODEL" model "${MODEL_REV:--}" "*" "$SRC" > "$LOGS/download.log" 2>&1 || fail 1 "download of $MODEL failed"
-MODEL_SHA=$(hf_py "$MODEL" "${MODEL_REV:--}" <<'PY'
-import sys
-from huggingface_hub import HfApi
-print(HfApi().model_info(sys.argv[1], revision=None if sys.argv[2] == "-" else sys.argv[2]).sha)
-PY
-)
+hf_get "$MODEL" model "${MODEL_REV:--}" "*" "$SRC" > "$LOGS/download.log" 2>&1 \
+    || { tail -5 "$LOGS/download.log"; fail 1 "download of $MODEL failed"; }
+MODEL_SHA=$(hub sha "$MODEL" model "${MODEL_REV:--}")
 echo "$MODEL $MODEL_SHA" > "$LOGS/source.txt"
 
 # foundry make_bf16. The MTP head stays by default: the published Qwen3.8 files

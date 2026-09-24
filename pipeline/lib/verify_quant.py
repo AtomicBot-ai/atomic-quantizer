@@ -34,7 +34,7 @@ def verify(inventory, profile, label, log, commit=None):
                       f"(e.g. {sorted(extra)[:2]} {sorted(missing)[:2]})")
     if log["fallbacks"]:
         errors.append(f"{log['fallbacks']} tensors fell back to another type")
-    if commit and log["commit"] and not commit.startswith(log["commit"]):
+    if commit and log["commit"] and not (commit.startswith(log["commit"]) or log["commit"].startswith(commit)):
         errors.append(f"built by llama.cpp {log['commit']}, the run is pinned to {commit}")
     if log["quant_mib"] and abs(log["quant_mib"] * 2**20 / rung["predicted_bytes"] - 1) > 0.002:
         errors.append(f"size {log['quant_mib']} MiB, ladder predicted {rung['predicted_bytes'] / 2**20:.1f} MiB")
