@@ -26,7 +26,10 @@ def _argv(box, key, cmd):
 
 def run(box, key, cmd, timeout=120, input=None, check=True):
     """Run a shell command on the box. Returns stdout as bytes."""
-    r = subprocess.run(_argv(box, key, cmd), input=input, capture_output=True, timeout=timeout)
+    try:
+        r = subprocess.run(_argv(box, key, cmd), input=input, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{cmd[:60]!r} on the box: no answer in {timeout} s (network?)") from None
     if check and r.returncode:
         raise RuntimeError(f"{cmd[:60]!r} on the box: {r.stderr.decode(errors='replace').strip()[-300:]}")
     return r.stdout
@@ -48,8 +51,11 @@ def bootstrap(box, key, with_token=True):
     run(box, key, "rm -rf /opt/pipeline && mkdir -p /opt/pipeline && tar -xzf - -C /opt/pipeline", input=tar, timeout=300)
     if with_token:
         run(box, key, "umask 077 && cat > /root/.hf_env", input=token_bytes())
-    run(box, key, "command -v tmux >/dev/null || (apt-get update -qq && "
-                  "DEBIAN_FRONTEND=noninteractive apt-get install -yq tmux >/dev/null)", timeout=900)
+    # apt can hang for good on a connection opened during a network drop: bound each try, try three times
+    run(box, key, "command -v tmux >/dev/null || for i in 1 2 3; do "
+                  "timeout 240 apt-get -o Acquire::Retries=3 update -qq && "
+                  "DEBIAN_FRONTEND=noninteractive timeout 240 apt-get install -yq tmux >/dev/null && break; "
+                  "[ $i = 3 ] && exit 1; sleep 20; done", timeout=900)
 
 
 def run_node(box, key, node, env, session=None, on_line=print, max_hours=12, stall_min=90):

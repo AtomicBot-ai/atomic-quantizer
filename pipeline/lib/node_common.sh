@@ -101,9 +101,10 @@ ensure_tools() {
     if [ ! -f "$VENV/.ready" ]; then
         say "installing system packages and a venv"
         export DEBIAN_FRONTEND=noninteractive
-        retry apt-get -o Acquire::Retries=5 update -qq >/dev/null || fail 1 "apt-get update failed"
-        retry apt-get -o Acquire::Retries=5 install -y -qq build-essential cmake ninja-build git curl ccache tmux procps \
-            libcurl4-openssl-dev libssl-dev python3-venv python3-pip >/dev/null || fail 1 "apt-get install failed"
+        # timeout: apt can hang for good on a connection opened during a network drop
+        retry timeout 300 apt-get -o Acquire::Retries=5 update -qq >/dev/null || fail 1 "apt-get update failed"
+        retry timeout 900 apt-get -o Acquire::Retries=5 install -y -qq build-essential cmake ninja-build git curl ccache \
+            tmux procps libcurl4-openssl-dev libssl-dev python3-venv python3-pip >/dev/null || fail 1 "apt-get install failed"
         python3 -m venv $VENV
         retry $VENV/bin/pip install -q "${PIP[@]}" -U pip "huggingface_hub>=1.0" pyyaml numpy || fail 1 "pip failed"
         touch "$VENV/.ready"   # only now: a half made venv is rebuilt, not trusted

@@ -403,8 +403,11 @@ def main():
         sys.exit("--local-hub needs --local-box: a rented box can not see a folder on this machine")
     if not a.local_hub:
         load_token()
-    {"status": cmd_status, "gguf": cmd_gguf, "ladder": cmd_ladder, "results": cmd_results, "card": cmd_card,
-     "ablit": cmd_ablit, "nvfp4": cmd_nvfp4, "reap": cmd_reap}[a.cmd](a)
+    try:
+        {"status": cmd_status, "gguf": cmd_gguf, "ladder": cmd_ladder, "results": cmd_results, "card": cmd_card,
+         "ablit": cmd_ablit, "nvfp4": cmd_nvfp4, "reap": cmd_reap}[a.cmd](a)
+    except RuntimeError as e:   # boxes are already released by the stage's finally
+        sys.exit(f"stopped: {e}\nrerun the same command to resume from what is on the hub")
 
 
 if __name__ == "__main__":
