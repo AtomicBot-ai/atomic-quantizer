@@ -101,11 +101,11 @@ ensure_tools() {
     if [ ! -f "$VENV/.ready" ]; then
         say "installing system packages and a venv"
         export DEBIAN_FRONTEND=noninteractive
-        apt-get -o Acquire::Retries=5 update -qq >/dev/null
-        apt-get -o Acquire::Retries=5 install -y -qq build-essential cmake ninja-build git curl ccache tmux procps \
-            libcurl4-openssl-dev libssl-dev python3-venv python3-pip >/dev/null
+        retry apt-get -o Acquire::Retries=5 update -qq >/dev/null || fail 1 "apt-get update failed"
+        retry apt-get -o Acquire::Retries=5 install -y -qq build-essential cmake ninja-build git curl ccache tmux procps \
+            libcurl4-openssl-dev libssl-dev python3-venv python3-pip >/dev/null || fail 1 "apt-get install failed"
         python3 -m venv $VENV
-        $VENV/bin/pip install -q "${PIP[@]}" -U pip "huggingface_hub>=1.0" pyyaml numpy
+        retry $VENV/bin/pip install -q "${PIP[@]}" -U pip "huggingface_hub>=1.0" pyyaml numpy || fail 1 "pip failed"
         touch "$VENV/.ready"   # only now: a half made venv is rebuilt, not trusted
     fi
 }
@@ -136,10 +136,10 @@ ensure_llama() {
         cmake --build "$LLAMA/build" -j "$(nproc)" --target llama-quantize llama-imatrix \
             llama-perplexity llama-gguf-split llama-cli llama-mtmd-cli >> "$LOGS/build.log" 2>&1 \
             || { tail -30 "$LOGS/build.log"; fail 1 "llama.cpp build failed"; }
-        $VENV/bin/pip install -q "${PIP[@]}" -r "$LLAMA/requirements/requirements-convert_hf_to_gguf.txt" \
+        retry $VENV/bin/pip install -q "${PIP[@]}" -r "$LLAMA/requirements/requirements-convert_hf_to_gguf.txt" \
             --extra-index-url https://download.pytorch.org/whl/cpu >> "$LOGS/build.log" 2>&1 \
             || { tail -30 "$LOGS/build.log"; fail 1 "converter requirements failed"; }
-        $VENV/bin/pip install -q "${PIP[@]}" -e "$LLAMA/gguf-py" >> "$LOGS/build.log" 2>&1 \
+        retry $VENV/bin/pip install -q "${PIP[@]}" -e "$LLAMA/gguf-py" >> "$LOGS/build.log" 2>&1 \
             || { tail -30 "$LOGS/build.log"; fail 1 "gguf-py install failed"; }
         touch "$LLAMA/.ready"
     fi
