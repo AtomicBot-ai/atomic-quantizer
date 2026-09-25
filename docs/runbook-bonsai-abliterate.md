@@ -1,6 +1,7 @@
 # Runbook: refusal ablation on a ternary Bonsai pack
 
-`scripts/abliterate.py` edits the weights of an ordinary transformers model. That path is
+Abliteration of an ordinary transformers model edits its weights (Heretic, in
+`pipeline/nodes/node_abliterate.sh`). That path is
 closed on PrismML's Ternary Bonsai 2 27B: the weights are ternary with an FP16 scale per
 128, the edit `W - r (r^T W)` is dense and lands at about 1.4% of `||W||` against a grid
 step of 1.7-2.4x a typical weight, so writing it back rounds it away.
