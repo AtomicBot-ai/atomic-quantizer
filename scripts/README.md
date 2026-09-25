@@ -1,6 +1,6 @@
 # The files in the root
 
-Five files, all at the repository root. Nothing here is a program to run: they
+Six files, all at the repository root. Nothing here is a program to run: they
 are toolboxes to work from.
 
 ```bash
@@ -77,6 +77,32 @@ windower, the flat-amax generator that stands in for "no calibration", the
 coverage counter, the vLLM logprob dump and the KLD bracket. Two pins live at
 the top of the file and matter: the modelopt commit the patcher was written
 against, and the sha of the vLLM branch, which is force pushed upstream.
+
+## `foundry-image.sh`
+
+The image side, written for Qwen-Image-2.1 and nothing else yet. Self
+contained: it does not source `foundry.sh` and never builds llama.cpp, which
+has no diffusion architecture at all. The tool is stable-diffusion.cpp's
+`sd-cli`, pinned by sha, and it does three jobs: `-M convert` quantizes, an
+ordinary render with `--imat-out` collects the importance matrix, an ordinary
+render is the measurement.
+
+There is no next token here, so the number is a perceptual distance: LPIPS,
+with SSIM and PSNR, between each build's render and the bf16 render of the same
+prompt and seed, with two measured floors for scale. Every AD rung is sized to
+a file another publisher already shipped, so each comparison is two ways of
+spending the same bytes. `img_box` prints the command list for the one box it
+needs; [runbook-image.md](../docs/runbook-image.md) explains the protocol and
+lists what has not been verified.
+
+Like the other two it writes its python helpers to disk with `img_write_py`,
+under `/tools`, and rewrites them on every `source`: a GGUF header reader that
+needs neither llama.cpp nor the gguf package and works on a range request of
+someone else's file, a size predictor that reads only the safetensors header,
+the imatrix reader, the metrics, the paired comparison, the table, the scan
+ranking, and the card's grid and chart. One pin matters, the sd.cpp sha,
+because which tensors the converter leaves alone changes upstream without
+notice. `IMG_UPLOAD=0` keeps a dry run from publishing anything.
 
 ## `auto_fmt.py`
 
