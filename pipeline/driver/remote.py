@@ -67,8 +67,12 @@ def run_node(box, key, node, env, session=None, on_line=print, max_hours=12, sta
     run(box, key, f"tmux kill-session -t {session} 2>/dev/null; : > {log}; "
                   f"tmux new-session -d -s {session} {shlex.quote('bash -c ' + shlex.quote(inner))}")
     offset, t0, last_new, fails, pending = 0, time.time(), time.time(), 0, b""
-    result, last_beat = None, None
+    result, last_beat, last_poll = None, None, time.time()
     while True:
+        # a laptop that sleeps pauses this loop but not the box: say so, with the minutes it cost
+        if time.time() - last_poll > 300:
+            on_line(f"[driver] this machine was suspended for {(time.time() - last_poll) / 60:.0f} min; the box kept running")
+        last_poll = time.time()
         try:
             data = run(box, key, f"tail -c +{offset + 1} {log}", timeout=60)
             fails = 0
@@ -106,6 +110,18 @@ def run_node(box, key, node, env, session=None, on_line=print, max_hours=12, sta
         if time.time() - last_new > stall_min * 60:
             return False, {"error": f"no progress for {stall_min} min"}
         time.sleep(5 if box.get("kind") == "docker" else 15)
+
+
+def pull(box, key, src, dest, max_mb=0, timeout=7200):
+    """The box's folder into dest on this machine: everything under max_mb (0 = everything), streamed over ssh."""
+    size = f"-size -{int(max_mb)}M " if max_mb else ""
+    reader = _argv(box, key, f"cd {shlex.quote(src)} && find . -type f {size}-print0 | tar -czf - --null -T -")
+    os.makedirs(dest, exist_ok=True)
+    cmd = " ".join(shlex.quote(x) for x in reader) + " | tar -xzf - -C " + shlex.quote(dest)
+    r = subprocess.run(["bash", "-o", "pipefail", "-c", cmd], capture_output=True, timeout=timeout)
+    if r.returncode:
+        raise RuntimeError(f"pull of {src}: {r.stderr.decode(errors='replace').strip()[-300:]}")
+    return sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(dest) for f in fs)
 
 
 def docker_box(name, hub_dir, image="ubuntu:24.04", cpus=None, memory=None):

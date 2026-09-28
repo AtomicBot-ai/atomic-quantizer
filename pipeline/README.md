@@ -21,6 +21,7 @@ died is resumed by running the same command again. The hub is the only state.
 | `lib/ladder_gen.py` | the AD recipe generator: tensor inventory + profile -> ordered llama-quantize rules per rung. Simulates llama-quantize and refuses anything it would silently change |
 | `profiles/dense-hybrid.yaml` | the Qwen3.8-27B August ladder (16 rungs) as roles |
 | `profiles/moe-hybrid.yaml` | the Ling-3.0-flash August ladder (21 rungs + 2 controls) as roles |
+| `profiles/qwen35-masks.yaml` | the hand masks measured on Qwen3.5-4B (stock Q5_K_S, F1, the kept mask as AD-Q5_K_S) for small tied Qwen3.5 |
 | `lib/gguf_inventory.py` | tensor names, types and shapes from a BF16 GGUF (or a quantize log) |
 | `lib/verify_quant.py` | after every quantize: each tensor's type, the override set, no fallbacks, commit, size |
 | `lib/results.py` | KLD log -> row, rows -> `results.json` (pinned schema, sizes always filled) |
@@ -36,7 +37,8 @@ died is resumed by running the same command again. The hub is the only state.
 | `nodes/node_nvfp4.sh` | llm-compressor NVFP4 calibrated on the same corpus build |
 | `driver/release.py` | stages, hub state, box rental, run log (`runs/<stem>-<time>/run.jsonl`) |
 | `driver/vast.py`, `driver/remote.py` | rent/probe/destroy (port of atomic-forge rent_race.sh); ssh or `docker exec`, tmux, follow |
-| `tests/` | replay of the published releases, refusal cases, results schema, card |
+| `tests/` | replay of the published releases and of the Qwen3.5-4B masks, the 2B smoke ladder, refusal cases, results schema, card |
+| `tests/fixtures/` | logs of runs that were never published (the 4B masks, the 2B smoke run), with their provenance |
 | `tests/acceptance_qwen38.py` | the rehearsal against the August Qwen3.8-27B release (KLD, top-1, size, verify logs, imatrix cosine) |
 | `runbooks/` | release day, rehearsal |
 
@@ -74,6 +76,22 @@ Needs Docker (ubuntu:24.04 is pulled). `/tmp/localhub/AtomicChat--Qwen3.5-0.8B-G
 then hold exactly what the hub would. `--im-max-chunks` marks the imatrix as
 capped in its params, it is not for publishing.
 
+## A rented box, nothing on the hub
+
+`--local-hub DIR` without `--local-box` rents the box as usual but keeps the
+repos on it, under `/hub`; no token leaves this machine and nothing is written
+to Hugging Face. When the box is released, every file under `--pull-max-mb`
+(default 200: logs, `results.json`, the ladder, the imatrix, the manifests) is
+copied into `DIR`; the GGUFs and the KLD reference stay on the box and die with
+it, `--pull-max-mb 0` brings them too. The pull happens on failure as well, so
+the logs of a broken node come home. Such a run is not resumable once the box
+is gone, and `status --local-hub DIR` afterwards reports only what was pulled.
+
+```bash
+python driver/release.py gguf --model Qwen/Qwen3.5-2B --recipe qwen3.8-27b --profile dense-hybrid \
+    --llama-commit 1692f9e50bb2 --local-hub ~/hub --ladder-ok --kld-chunks 48 --disk-gb 200
+```
+
 ## The recipe generator
 
 ```bash
@@ -105,6 +123,12 @@ ladder says:
 Bands (edge and mid blocks that get more bits) are counted among the blocks that
 carry the band tensor, MTP excluded; the dense profile uses fractions of depth
 that give exactly the August 4/12/8 on 64 blocks.
+
+A model with tied embeddings (no `output.weight`: the small Qwen3.5 models)
+uses `token_embd.weight` as its head. `tied_embeddings: output` in a profile
+gives it the output role's type there, which is what llama.cpp does on its own;
+without it the head takes the cheap embedding type (iq4_xs on the 2B smoke run).
+The key does nothing on a model that has an `output.weight`.
 
 `python -m pytest tests` replays both August releases: for all 16 Qwen3.8-27B
 rungs and 19 Ling rungs, the simulated type of every tensor, the set of tensors
