@@ -6,6 +6,11 @@ With LOCAL_HUB=/some/dir the repos under AtomicChat/ are plain folders
 container without a token and without touching the real hub. Upstream models and
 calib-corpora are always read from Hugging Face.
 
+With LOCAL_HUB=ssh://root@HOST:PORT/hub the same folders live on a rented box
+and are reached over ssh (key: LOCAL_HUB_KEY, default ~/.ssh/id_ed25519). That
+is how the driver keeps a run off the hub entirely: the nodes on the box see
+LOCAL_HUB=/hub, the driver on the laptop sees the ssh form of the same place.
+
     hub.py has    REPO TYPE GLOB          exit 0 when a file matches
     hub.py ls     REPO TYPE               one path per line
     hub.py ensure REPO TYPE               create, private
@@ -15,10 +20,14 @@ calib-corpora are always read from Hugging Face.
     hub.py sha    REPO TYPE [REV]         current commit (model id + revision on the real hub)
 """
 import fnmatch
+import io
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 
 OWN = "AtomicChat/"
@@ -30,6 +39,39 @@ def local_root(repo):
     if root and repo.startswith(OWN) and repo not in SHARED:
         return os.path.join(root, repo.replace("/", "--"))
     return None
+
+
+def _remote(root):
+    """(ssh argv, path on the box) for an ssh:// root, else None."""
+    m = re.match(r"ssh://([^@]+)@([^:/]+):(\d+)(/.*)$", root or "")
+    if not m:
+        return None
+    user, host, port, path = m.groups()
+    key = os.path.expanduser(os.environ.get("LOCAL_HUB_KEY", "~/.ssh/id_ed25519"))
+    argv = ["ssh", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
+            "-o", "ServerAliveInterval=30", "-i", key, "-p", port, f"{user}@{host}"]
+    return argv, path
+
+
+def _ssh(argv, cmd, input=None, timeout=600):
+    r = subprocess.run(argv + [cmd], input=input, capture_output=True, timeout=timeout)
+    if r.returncode:
+        raise RuntimeError(f"hub over ssh, {cmd[:60]!r}: {r.stderr.decode(errors='replace').strip()[-300:]}")
+    return r.stdout
+
+
+def _remote_ls(argv, path):
+    # portable (no -printf): the same command also runs under a local shell in the tests
+    out = _retry(lambda: _ssh(argv, f"test -d {shlex.quote(path)} || exit 0; cd {shlex.quote(path)} && "
+                                    "find . -type f | sed 's|^\\./||' | sort", timeout=120), f"ls {path}")
+    return [l for l in out.decode().splitlines() if l]
+
+
+def _tar_bytes(local):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        t.add(local, arcname=".")
+    return buf.getvalue()
 
 
 def _api():
@@ -50,6 +92,8 @@ def _retry(fn, what, tries=3):
 
 def ls(repo, kind):
     root = local_root(repo)
+    if root and _remote(root):
+        return _remote_ls(*_remote(root))
     if root:
         if not os.path.isdir(root):
             return []
@@ -67,6 +111,10 @@ def has(repo, kind, pattern):
 
 def ensure(repo, kind):
     root = local_root(repo)
+    if root and _remote(root):
+        argv, path = _remote(root)
+        _retry(lambda: _ssh(argv, f"mkdir -p {shlex.quote(path)}", timeout=120), f"ensure {path}")
+        return
     if root:
         os.makedirs(root, exist_ok=True)
         return
@@ -75,6 +123,14 @@ def ensure(repo, kind):
 
 def up(local, remote, repo, kind, message=None):
     root = local_root(repo)
+    if root and _remote(root):
+        argv, path = _remote(root)
+        dest = shlex.quote(f"{path}/{remote}")
+        with open(local, "rb") as f:
+            data = f.read()
+        _retry(lambda: _ssh(argv, f"mkdir -p $(dirname {dest}) && cat > {dest}.part && mv {dest}.part {dest}",
+                            input=data, timeout=600), f"up {remote}")
+        return
     if root:
         dest = os.path.join(root, remote)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -87,6 +143,12 @@ def up(local, remote, repo, kind, message=None):
 
 def updir(local, remote, repo, kind, message=None):
     root = local_root(repo)
+    if root and _remote(root):
+        argv, path = _remote(root)
+        dest = shlex.quote(path if remote in ("", ".") else f"{path}/{remote}")
+        _retry(lambda: _ssh(argv, f"mkdir -p {dest} && tar -xzf - -C {dest}", input=_tar_bytes(local), timeout=600),
+               f"updir {remote}/")
+        return
     if root:
         dest = os.path.join(root, remote) if remote not in ("", ".") else root
         shutil.copytree(local, dest, dirs_exist_ok=True)
@@ -98,6 +160,17 @@ def updir(local, remote, repo, kind, message=None):
 def get(repo, kind, rev, pattern, dest):
     """Files matching pattern into dest, keeping their paths. Returns the local paths."""
     root = local_root(repo)
+    if root and _remote(root):
+        argv, path = _remote(root)
+        names = [f for f in _remote_ls(argv, path) if fnmatch.fnmatch(f, pattern)]
+        if not names:
+            raise FileNotFoundError(f"{repo}: nothing matches {pattern}")
+        data = _retry(lambda: _ssh(argv, f"cd {shlex.quote(path)} && tar -czf - --null -T -",
+                                   input=b"\0".join(n.encode() for n in names) + b"\0", timeout=1800), f"get {pattern}")
+        os.makedirs(dest, exist_ok=True)
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as t:
+            t.extractall(dest)
+        return [os.path.join(dest, n) for n in names]
     if root:
         out = []
         for f in ls(repo, kind):

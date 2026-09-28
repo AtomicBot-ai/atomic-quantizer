@@ -74,6 +74,22 @@ Needs Docker (ubuntu:24.04 is pulled). `/tmp/localhub/AtomicChat--Qwen3.5-0.8B-G
 then hold exactly what the hub would. `--im-max-chunks` marks the imatrix as
 capped in its params, it is not for publishing.
 
+## A rented box, nothing on the hub
+
+`--local-hub DIR` without `--local-box` rents the box as usual but keeps the
+repos on it, under `/hub`; no token leaves this machine and nothing is written
+to Hugging Face. When the box is released, every file under `--pull-max-mb`
+(default 200: logs, `results.json`, the ladder, the imatrix, the manifests) is
+copied into `DIR`; the GGUFs and the KLD reference stay on the box and die with
+it, `--pull-max-mb 0` brings them too. The pull happens on failure as well, so
+the logs of a broken node come home. Such a run is not resumable once the box
+is gone, and `status --local-hub DIR` afterwards reports only what was pulled.
+
+```bash
+python driver/release.py gguf --model Qwen/Qwen3.5-2B --recipe qwen3.8-27b --profile dense-hybrid \
+    --llama-commit 1692f9e50bb2 --local-hub ~/hub --ladder-ok --kld-chunks 48 --disk-gb 200
+```
+
 ## The recipe generator
 
 ```bash

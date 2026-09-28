@@ -20,6 +20,12 @@ A free local run, no token, no vast: --local-hub DIR --local-box keeps the
 AtomicChat/ repos as folders under DIR and runs the nodes in a CPU container
 (docker, ubuntu:24.04). With --ctx 512 --kld-chunks 16 --im-max-chunks 64 a
 small model goes through every stage in well under an hour.
+
+A rented box without the hub: --local-hub DIR alone (gguf only) keeps the repos
+on the box at /hub, no token goes anywhere, and when the box is released every
+file under --pull-max-mb (default 200: logs, results, ladder, imatrix; not the
+GGUFs and not the KLD reference) is copied into DIR. Such a run is not resumable
+once the box is gone.
 """
 import argparse
 import fnmatch
@@ -27,6 +33,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -39,6 +46,7 @@ import vast  # noqa: E402
 
 PROFILES = os.path.join(HERE, "..", "profiles")
 RUNS = os.path.join(HERE, "..", "runs")
+BOX_HUB = "/hub"   # where a rented box keeps the repos when the run stays off the hub (--local-hub without --local-box)
 
 
 def load_token():
@@ -125,7 +133,8 @@ def box_plan(size_b, gpu_query=None, disk_gb=None):
         q = "gpu_ram>=80 num_gpus>=4 cpu_cores_effective>=64 cpu_ram>=384"
     else:
         q = "gpu_ram>=140 num_gpus>=8 cpu_cores_effective>=96 cpu_ram>=1000"
-    q += " cuda_max_good>=13.0"
+    if "cuda_max_good" not in q:
+        q += " cuda_max_good>=13.0"
     # source + BF16 + its upload shards, then BF16 + KLD reference (~90 GB) + its parts, + the largest quant
     disk = disk_gb or int(max(3 * s, s + 200) + 0.6 * s + 40)
     return q, disk
@@ -145,11 +154,31 @@ def open_box(run, a, stage, query=None, disk=None, size_b=None):
         run.event("box", iid=box["iid"], gpu=box["gpu"], dph=box["dph"], host=box["host"])
     run.boxes.append(box)
     remote.bootstrap(box, a.ssh_key, with_token=not a.local_hub)
+    if a.local_hub and box.get("kind") != "docker":
+        # the hub lives on the box: the nodes see /hub, this driver sees the same folder over ssh
+        remote.run(box, a.ssh_key, f"mkdir -p {BOX_HUB}")
+        os.environ["LOCAL_HUB"] = f"ssh://root@{box['host']}:{box['port']}{BOX_HUB}"
+        os.environ["LOCAL_HUB_KEY"] = a.ssh_key
     return box
+
+
+def box_hub(a, box):
+    """LOCAL_HUB as the nodes on this box must see it."""
+    if not a.local_hub:
+        return None
+    return a.local_hub if box.get("kind") == "docker" else BOX_HUB
 
 
 def close_boxes(run, a):
     for b in run.boxes:
+        if a.local_hub and b.get("kind") != "docker":
+            # bring the run home before the box goes: logs and numbers always, blobs only when asked
+            try:
+                got = remote.pull(b, a.ssh_key, BOX_HUB, a.local_hub, max_mb=a.pull_max_mb)
+                run.event("pull", into=a.local_hub, max_mb=a.pull_max_mb, bytes=got)
+            except (RuntimeError, subprocess.TimeoutExpired) as e:
+                run.event("pull_failed", error=str(e)[:200])
+            os.environ["LOCAL_HUB"] = a.local_hub
         hours = (time.time() - b["t_rented"]) / 3600
         run.event("release_box", iid=b["iid"], hours=round(hours, 2), cost=round(hours * float(b["dph"] or 0), 2))
         if a.keep_box:
@@ -163,7 +192,7 @@ def close_boxes(run, a):
 
 def node(run, a, box, name, **env):
     env.update(STEM=run.stem, LLAMA_COMMIT=getattr(a, "llama_commit", None), LLAMA_REPO=getattr(a, "llama_repo", None),
-               REPO_SUFFIX=run.suffix or None, FORCE="1" if a.force else None, LOCAL_HUB=a.local_hub,
+               REPO_SUFFIX=run.suffix or None, FORCE="1" if a.force else None, LOCAL_HUB=box_hub(a, box),
                CTX=getattr(a, "ctx", None), KLD_CHUNKS=getattr(a, "kld_chunks", None),
                IM_MAX_CHUNKS=getattr(a, "im_max_chunks", None))
     run.event("node", node=name, **{k: v for k, v in env.items() if v is not None and k != "LLAMA_REPO"})
@@ -360,6 +389,9 @@ def main():
         p.add_argument("--force", action="store_true")
         p.add_argument("--local-hub", help="keep the AtomicChat/ repos as folders here instead of on the hub")
         p.add_argument("--local-box", action="store_true", help="run the nodes in a local CPU container (needs --local-hub)")
+        p.add_argument("--pull-max-mb", type=int, default=200,
+                       help="with --local-hub on a rented box: copy home the files under this size when the box is "
+                            "released (0 = everything, GGUFs and KLD reference included)")
 
     p = sub.add_parser("status"); common(p)
     p = sub.add_parser("gguf"); common(p)
@@ -399,8 +431,8 @@ def main():
         os.environ["LOCAL_HUB"] = a.local_hub
     if a.local_box and not a.local_hub:
         sys.exit("--local-box needs --local-hub: the container can not write to the real hub without a token")
-    if a.local_hub and a.cmd in ("gguf", "ablit", "nvfp4") and not a.local_box:
-        sys.exit("--local-hub needs --local-box: a rented box can not see a folder on this machine")
+    if a.local_hub and a.cmd in ("ablit", "nvfp4") and not a.local_box:
+        sys.exit("--local-hub needs --local-box for ablit and nvfp4: those nodes publish to the hub")
     if not a.local_hub:
         load_token()
     try:
