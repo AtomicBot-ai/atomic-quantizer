@@ -150,6 +150,23 @@ def render(pattern, bands):
     return out
 
 
+def tied(profile, inv):
+    """The role whose type the token embedding takes, when the model has no output.weight.
+
+    With tied embeddings token_embd.weight is also the output head, and llama.cpp
+    treats it as the output tensor (llama-quant.cpp: `!qs.has_output && name ==
+    token_embd` takes the output branch, q6_K under Q4_K_M and Q5_K_S). A ladder
+    written for untied weights gives token_embd the cheap input type instead and
+    starves the head: on Qwen3.5-2B the August dense ladder put it at iq4_xs.
+    """
+    role = profile.get("tied_embeddings")
+    if not role or any(t["name"] == "output.weight" for t in inv["tensors"]):
+        return None
+    if role not in {r["name"] for r in profile["roles"]}:
+        raise LadderError(f"tied_embeddings names unknown role {role}")
+    return role
+
+
 def rung_rules(profile, rung, bands, inv):
     """Ordered (pattern, type, role) list for one rung."""
     rules = []
@@ -163,9 +180,12 @@ def rung_rules(profile, rung, bands, inv):
     unknown = set(types) - known
     if unknown:
         raise LadderError(f"{rung['label']}: types for unknown roles {sorted(unknown)}")
+    head = tied(profile, inv)
     names = [t["name"] for t in inv["tensors"]]
     for role in profile["roles"]:
         src = role.get("same_as", role["name"])
+        if head and head in types and re.search(role["pattern"], "token_embd.weight"):
+            src = head   # the embedding is the head here: it takes the head's type
         if src not in types:
             continue
         pat = render(role["pattern"], bands)
@@ -261,6 +281,7 @@ def build(profile, inv, only=None):
     bands = compute_bands(profile, inv)
     out = {"profile": profile["name"], "inventory": inv.get("source"), "arch": inv.get("arch"),
            "block_count": inv.get("block_count"), "mtp_blocks": inv.get("mtp_blocks"),
+           "tied_embeddings": tied(profile, inv),
            "bands": {k: v for k, v in bands.items() if k != "eligible"}, "rungs": []}
     problems = {}
     for rung in profile["rungs"]:
@@ -340,7 +361,8 @@ def main():
     ladder, problems = build(profile, inv, a.only)
 
     print(f"{profile['name']}: {inv.get('arch')}, {inv.get('block_count')} blocks, mtp {inv.get('mtp_blocks')}, "
-          f"bands {ladder['bands']}")
+          f"bands {ladder['bands']}" + (f", token_embd is the head (takes {ladder['tied_embeddings']})"
+                                        if ladder.get("tied_embeddings") else ""))
     print(f"{'label':22s} {'ftype':8s} {'rules':>5s} {'overr':>5s} {'GiB':>7s} {'BPW':>6s}  file_type")
     for r in ladder["rungs"]:
         print(f"{r['label']:22s} {r['ftype']:8s} {len(r['rules']):5d} {r['expected_overrides']:5d} "

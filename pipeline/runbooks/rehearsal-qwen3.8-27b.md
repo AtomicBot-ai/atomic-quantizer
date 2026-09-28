@@ -121,3 +121,52 @@ a 4x RTX 5090 box runs two shards in parallel (~2 h), a single H100 one
 (~4 h). Quantizing 16 rungs of a 27B is CPU time: ~3-5 min per rung on 128
 cores, 10-15 min on the 24 cores of a typical 1x H100 offer. Expect 5-7 h and
 $25-30 on 4x RTX 5090 ($4.3/h), 9-12 h and $35-45 on 1x H100 ($3.9/h).
+
+The ladder as measured (`tests/fixtures/qwen3.5-2b-smoke/results.json`), 48
+chunks of 4096 over neutral against the 2B BF16:
+
+| rung | GB | BPW | mean KLD | top-1 % | head in the smoke |
+|---|---|---|---|---|---|
+| Q8_0 | 2.05 | 8.41 | 0.00131 | 97.98 | q8_0 |
+| AD-Q6_K | 1.83 | 7.50 | 0.00232 | 97.36 | q8_0 |
+| AD-Q6_K-Q5_K | 1.56 | 6.37 | 0.00801 | 94.97 | q5_k |
+| AD-Q5_K_M | 1.36 | 5.57 | 0.01996 | 91.76 | q4_k |
+| AD-Q5_K_M-Q4_K_M | 1.25 | 5.12 | 0.03109 | 89.92 | iq4_xs |
+| AD-Q4_K_M | 1.18 | 4.80 | 0.04074 | 88.74 | iq4_xs |
+| AD-IQ4_XS | 1.14 | 4.66 | 0.04539 | 88.17 | iq4_xs |
+| AD-IQ4_XS-IQ3_S | 1.04 | 4.25 | 0.08206 | 84.80 | iq4_xs |
+| AD-IQ3_S | 1.01 | 4.12 | 0.09710 | 83.61 | iq4_xs |
+| AD-IQ3_S-IQ3_XXS | 0.96 | 3.89 | 0.13214 | 81.16 | iq4_xs |
+| AD-IQ3_XXS | 0.91 | 3.68 | 0.21237 | 76.64 | iq4_xs |
+| AD-IQ2_S | 0.85 | 3.47 | 0.35528 | 70.19 | iq4_xs |
+| AD-IQ2_S-IQ2_XS | 0.81 | 3.30 | 0.55249 | 63.48 | iq4_xs |
+| AD-IQ2_XS | 0.79 | 3.21 | 0.65931 | 60.48 | iq4_xs |
+| AD-IQ2_XXS | 0.74 | 3.02 | 1.12851 | 49.55 | iq4_xs |
+| AD-IQ1_M | 0.72 | 2.91 | 1.35418 | 45.05 | iq4_xs |
+
+KLD falls and top-1 rises monotonically with size, and every verify log agrees
+with the ladder. The head column is the catch: the 2B ties its embedding to the
+output, and the August ladder gave that tensor the cheap embedding type: iq4_xs
+from AD-Q5_K_M-Q4_K_M down. `dense-hybrid` now has `tied_embeddings: output`,
+which gives the head a heavier type on 12 of the 16 rungs (q6_k from
+AD-Q5_K_M to AD-IQ4_XS), so these numbers are the "before";
+`tests/test_qwen35_small.py` pins both ladders.
+
+What the head costs, measured on Qwen3.5-4B on a laptop (the bench of the
+24.09 masks: imatrix on the 4B, 30 chunks, one build), MB / mean KLD / top-1:
+
+| build | MB | mean KLD | top-1 % |
+|---|---|---|---|
+| AD-Q4_K_M, head iq4_xs (the smoke ladder) | 2 657 | 0.024972 | 91.85 |
+| stock Q4_K_M | 2 783 | 0.024006 | 92.78 |
+| AD-Q4_K_M, head q6_k | 2 841 | 0.015298 | 94.06 |
+| AD-Q5_K_M, head q4_k (the smoke ladder) | 3 117 | 0.012272 | 94.04 |
+| stock Q5_K_S | 3 118 | 0.007951 | 95.61 |
+| hand mask G (`qwen35-masks` AD-Q5_K_S) | 3 159 | 0.007143 | 95.73 |
+| stock Q5_K_M | 3 203 | 0.006731 | 95.87 |
+| AD-Q5_K_M, head q6_k | 3 281 | 0.004567 | 96.48 |
+
+With the starved head the ladder lost to stock Q5_K_S by 54 % at the same
+size; with the head at q6_k it beats the stock presets and the best hand mask
+by about a third for 2-4 % more bytes. None of this touches the 27B, which has
+its own `output.weight`: its rehearsal ladder is the August one, byte for byte.

@@ -1,8 +1,14 @@
 # Release day: a new Qwen
 
 Order of work and the points where a person decides. Durations are for a 27B
-dense model on one 4x RTX 5090 box; replace them with the rehearsal's
+dense model on one 4x RTX 5090 box, scaled from the Qwen3.5-2B smoke run
+(`rehearsal-qwen3.8-27b.md`, "Measured"); replace them with the 27B rehearsal's
 `run.jsonl` numbers once it has run.
+
+The machine that runs `release.py` must stay awake until it prints the
+release of the box: a sleeping laptop pauses the driver, not the box, and the
+box bills for the whole night. On a Mac every command below goes under
+`caffeinate -i`.
 
 ## 0. Before renting anything (15 min)
 
@@ -23,14 +29,22 @@ Check by hand, each one is a stop sign:
   for this tokenizer? A new tokenizer needs `make_recipe` + `build_corpus` from
   foundry.sh first (about an hour, a person reads the shares).
 - **profile**: dense hybrid -> `dense-hybrid`; MoE -> `moe-hybrid`, expect the
-  generator to list tensor groups it does not know (next step).
+  generator to list tensor groups it does not know (next step). A small model
+  with tied embeddings (no `output.weight` in the inventory) still takes
+  `dense-hybrid`: its head gets the output types (`tied_embeddings`), and on
+  Qwen3.5-4B that ladder beat the hand masks of `qwen35-masks` by a third.
 
-## 1. GGUF (4-5 h)
+## 1. GGUF (5-7 h)
 
 ```bash
-python driver/release.py gguf --model Qwen/Qwen4-XXB --recipe <build> --profile <profile> \
+caffeinate -i python driver/release.py gguf --model Qwen/Qwen4-XXB --recipe <build> --profile <profile> \
     --llama-commit <sha>
 ```
+
+Where the hours go, scaled from the 2B: convert ~30 min (half of it the CUDA
+build of llama.cpp), base reference ~10 min, imatrix ~2 h (two shards on four
+cards; it is bound by copying activations to the host, not by the GPU), ladder
+seconds, 16 rungs at 3-5 min each on 128 cores plus uploads.
 
 Runs convert, base reference, imatrix, then stops at the **ladder review**: it
 prints every rung with its predicted size and asks before quantizing. If the

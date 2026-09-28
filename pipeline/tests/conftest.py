@@ -13,6 +13,8 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "lib"))
 CACHE = os.environ.get("PIPELINE_FIXTURES", os.path.join(HERE, ".cache"))
+# fixtures kept in the repo: runs that were never published, see fixtures/README.md
+LOCAL = os.path.join(HERE, "fixtures")
 
 DENSE = ("AtomicChat/Qwen3.8-27B-GGUF-metrics", "6d91a9e43743e4cae36354df810860b8c1eb9834")
 MOE = ("AtomicChat/Ling-3.0-flash-GGUF-metrics", "c4e73e27bf86590fb30b9547509fde69d5f39510")
@@ -43,3 +45,8 @@ def moe_log():
 @pytest.fixture(scope="session")
 def profiles():
     return os.path.join(HERE, "..", "profiles")
+
+
+@pytest.fixture(scope="session")
+def local_fixture():
+    return lambda *parts: os.path.join(LOCAL, *parts)

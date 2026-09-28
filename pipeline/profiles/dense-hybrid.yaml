@@ -14,10 +14,29 @@
 # first 4 and last 12, mid = the 8 after the head (write_ladder comment: edge
 # weighting halves the divergence at one size class). As fractions they scale
 # to another depth instead of lifting every block of a small model.
+#
+# Small models of the line (0.8B to 9B) tie the embedding to the head: there is
+# no output.weight and token_embd.weight is the head. The August ladder knew
+# only untied weights and gave it the cheap token_embd type, so on the
+# Qwen3.5-2B smoke run (2026-09-25) the head sat at iq4_xs from AD-Q5_K_M-Q4_K_M
+# down. llama.cpp itself treats a tied embedding as the output tensor, and the
+# Qwen3.5-4B masks lost when the head went below q6_K (profiles/qwen35-masks.yaml).
+# tied_embeddings makes token_embd take the output role's type on such a model;
+# on Qwen3.8-27B, which has output.weight, it changes nothing.
+#
+# Measured on Qwen3.5-4B (2026-09-29, the bench of the masks: imatrix on the 4B,
+# 30 chunks of 4096 over neutral, one llama.cpp build), MB / mean KLD / top-1:
+#   AD-Q4_K_M  head iq4_xs (before)   2 657   0.024972   91.85
+#   AD-Q4_K_M  head q6_k   (now)      2 841   0.015298   94.06   stock Q4_K_M 2 783 0.024006
+#   AD-Q5_K_M  head q4_k   (before)   3 117   0.012272   94.04   stock Q5_K_S 3 118 0.007951
+#   AD-Q5_K_M  head q6_k   (now)      3 281   0.004567   96.48   stock Q5_K_M 3 203 0.006731
+# Before, the ladder lost to stock Q5_K_S by 54 % at the same size; now it beats
+# the stock presets and the best hand mask by a third for 2-4 % more bytes.
 name: dense-hybrid
 about: Qwen3.5/3.8 dense hybrid, 16 rungs from Q8_0 down to AD-IQ1_M
 ftype: Q8_0
 file_type_from: ffn_up
+tied_embeddings: output
 
 bands:
   group: '^blk\.\d+\.ffn_down\.weight$'

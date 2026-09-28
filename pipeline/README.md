@@ -21,6 +21,7 @@ died is resumed by running the same command again. The hub is the only state.
 | `lib/ladder_gen.py` | the AD recipe generator: tensor inventory + profile -> ordered llama-quantize rules per rung. Simulates llama-quantize and refuses anything it would silently change |
 | `profiles/dense-hybrid.yaml` | the Qwen3.8-27B August ladder (16 rungs) as roles |
 | `profiles/moe-hybrid.yaml` | the Ling-3.0-flash August ladder (21 rungs + 2 controls) as roles |
+| `profiles/qwen35-masks.yaml` | the hand masks measured on Qwen3.5-4B (stock Q5_K_S, F1, the kept mask as AD-Q5_K_S) for small tied Qwen3.5 |
 | `lib/gguf_inventory.py` | tensor names, types and shapes from a BF16 GGUF (or a quantize log) |
 | `lib/verify_quant.py` | after every quantize: each tensor's type, the override set, no fallbacks, commit, size |
 | `lib/results.py` | KLD log -> row, rows -> `results.json` (pinned schema, sizes always filled) |
@@ -36,7 +37,8 @@ died is resumed by running the same command again. The hub is the only state.
 | `nodes/node_nvfp4.sh` | llm-compressor NVFP4 calibrated on the same corpus build |
 | `driver/release.py` | stages, hub state, box rental, run log (`runs/<stem>-<time>/run.jsonl`) |
 | `driver/vast.py`, `driver/remote.py` | rent/probe/destroy (port of atomic-forge rent_race.sh); ssh or `docker exec`, tmux, follow |
-| `tests/` | replay of the published releases, refusal cases, results schema, card |
+| `tests/` | replay of the published releases and of the Qwen3.5-4B masks, the 2B smoke ladder, refusal cases, results schema, card |
+| `tests/fixtures/` | logs of runs that were never published (the 4B masks, the 2B smoke run), with their provenance |
 | `tests/acceptance_qwen38.py` | the rehearsal against the August Qwen3.8-27B release (KLD, top-1, size, verify logs, imatrix cosine) |
 | `runbooks/` | release day, rehearsal |
 
@@ -121,6 +123,12 @@ ladder says:
 Bands (edge and mid blocks that get more bits) are counted among the blocks that
 carry the band tensor, MTP excluded; the dense profile uses fractions of depth
 that give exactly the August 4/12/8 on 64 blocks.
+
+A model with tied embeddings (no `output.weight`: the small Qwen3.5 models)
+uses `token_embd.weight` as its head. `tied_embeddings: output` in a profile
+gives it the output role's type there, which is what llama.cpp does on its own;
+without it the head takes the cheap embedding type (iq4_xs on the 2B smoke run).
+The key does nothing on a model that has an `output.weight`.
 
 `python -m pytest tests` replays both August releases: for all 16 Qwen3.8-27B
 rungs and 19 Ling rungs, the simulated type of every tensor, the set of tensors
