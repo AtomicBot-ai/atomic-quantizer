@@ -10,7 +10,7 @@
 # checks its inputs, and stops loudly when something is missing.
 
 # Bump this on every change. reload compares it against what is on github.
-FOUNDRY_VERSION=2026-08-21.03
+FOUNDRY_VERSION=2026-09-29.01
 
 # ------------------------------------------------------------------ settings
 # These live here and nowhere else. An earlier edit lost them, which left BIN,
@@ -255,7 +255,7 @@ selfcheck() {
              install_auto_fmt setup_corpus build_corpus push_corpus \
              corpus_check make_recipe new_model pick_model get_eval \
              get_eval_set eval_size get_bf16 get_quants get_one find_bf16 \
-             get_upstream make_bf16 base kld kld_all kld_ext bench bench_all \
+             get_upstream make_bf16 base kld kld_all kld_ext kld_diff bench bench_all \
              gen results bits quantize ladder write_ladder get_external \
              push_base push_logs push_results push_model push_model_split \
              push_card pull_logs get_imatrix get_calib wait_calib im_size \
@@ -312,6 +312,7 @@ MEASURE       get_eval | get_eval_set NAME | eval_size | set_ctx N | base
               use_gpus 0,1 | kld MODEL | kld_all | kld_ext
               bench MODEL | bench_all | gen MODEL NGL "EXTRA"
               results | pull_logs
+              kld_diff BASE.log VARIANT.log [MIB_DELTA]   is the gap real
 
 UPLOAD        push_base | push_logs | push_results | push_quants | push_model FILE
               push_model_split FILE | push_card FILE | send_base user@host PORT
@@ -2073,6 +2074,128 @@ kld_ext() {
         kld "$f"
     done
     results
+}
+
+# kld_diff BASE.log VARIANT.log [MIB_DELTA]
+# Whether two builds really differ. Two mean KLDs a few thousandths apart can
+# be noise, and the ± llama-perplexity prints is per build, over tokens, so it
+# says nothing about the difference. This pairs the logs chunk by chunk on the
+# same tokens and puts an interval on the difference.
+#
+#   kld_diff /logs/kld-neutral--Q5_K_S.log /logs/kld-neutral--AD-Q5_K_S.log 38.8
+#   kld_diff Q5_K_S AD-Q5_K_S 38.8        # bare names read /logs/kld-$EVALSET--NAME.log
+kld_diff() {
+    if [ -z "$2" ]; then
+        cat << 'KLDDIFFUSAGEEOF'
+kld_diff BASE.log VARIANT.log [MIB_DELTA]
+
+Paired comparison of two llama-perplexity --kl-divergence logs taken on the
+same eval set, context and reference. A bare name reads
+/logs/kld-$EVALSET--NAME.log. MIB_DELTA is the variant's size minus the base's,
+in MiB; with it the difference is also given per 100 MiB spent.
+
+  dKLD       mean of variant minus base, chunk by chunk, with a 95% interval
+  rel        the same as a fraction of the base's KLD
+  lower in   chunks where the variant's KLD is below the base's
+  d top-1    change in top-1 agreement, percentage points
+
+How: every chunk row in the log is a running mean. Chunks score the same number
+of tokens, so chunk i's own value is i*c_i - (i-1)*c_{i-1}. The intervals are a
+bootstrap over chunks, not tokens, because tokens inside one window are
+correlated: 20000 resamples, fixed seed, so a rerun prints the same numbers.
+
+The log rounds the running means to 5 decimals, and rebuilding per chunk
+values from them adds noise that grows with the chunk index: about 1.8e-5 to
+the standard error at 30 chunks, in quadrature, and about 3e-5 at 87. So the
+intervals err slightly wide.
+
+An interval that holds zero is not a difference, however the means read.
+KLDDIFFUSAGEEOF
+        return 1
+    fi
+    local a="$1" b="$2"
+    [ -f "$a" ] || a="/logs/kld-$EVALSET--$1.log"
+    [ -f "$b" ] || b="/logs/kld-$EVALSET--$2.log"
+    [ -f "$a" ] || { echo "no log at $1, nor at $a"; return 1; }
+    [ -f "$b" ] || { echo "no log at $2, nor at $b"; return 1; }
+    python3 - "$a" "$b" ${3:+"$3"} << 'KLDDIFFEOF'
+import random, re, sys
+
+ROW = re.compile(r"\s*(\d+)\s+([\d.]+)\s+±\s+[\d.]+\s+(-?[\d.]+)\s+±\s+[\d.]+\s+"
+                 r"([\d.]+)\s+±\s+[\d.]+\s+([\d.]+)\s+±\s+[\d.]+\s+%\s+([\d.]+)\s+±")
+
+def fail(msg):
+    print(msg)
+    sys.exit(1)
+
+def chunks(path):
+    kl, top = [], []
+    for line in open(path, errors="ignore"):
+        m = ROW.match(line)
+        if m:
+            kl.append(float(m.group(4)))
+            top.append(float(m.group(6)))
+    if not kl:
+        fail("no chunk rows in %s. Not a --kl-divergence log, or the run died "
+             "before its first chunk." % path)
+    per = lambda c: [(i + 1) * v - i * (c[i - 1] if i else 0.0) for i, v in enumerate(c)]
+    return per(kl), per(top)
+
+# Logs of one reference over the same tokens agree on its perplexity to the
+# last digit. If they do not, the pairing below is between different text.
+def base_ppl(path):
+    m = re.search(r"Mean PPL\(base\)\s*:\s*([\d.]+)", open(path, errors="ignore").read())
+    return m.group(1) if m else None
+
+def boot(fn, n, reps=20000, seed=0):
+    rnd = random.Random(seed)
+    out = sorted(fn([rnd.randrange(n) for _ in range(n)]) for _ in range(reps))
+    return out[int(0.025 * reps)], out[int(0.975 * reps)]
+
+def measure(base_log, var_log, mib=None):
+    kb, tb = chunks(base_log)
+    kv, tv = chunks(var_log)
+    n = len(kb)
+    if n != len(kv):
+        fail("chunk counts differ: %d vs %d. Both logs have to cover the same "
+             "chunks of the same eval set at the same context, and both runs "
+             "have to have finished." % (n, len(kv)))
+    if n < 2:
+        fail("one chunk only, nothing to put an interval on")
+    pa, pb = base_ppl(base_log), base_ppl(var_log)
+    if pa and pb and pa != pb:
+        fail("the logs disagree on the reference's perplexity (%s vs %s): they "
+             "were not scored against the same reference over the same tokens, "
+             "so a paired difference means nothing." % (pa, pb))
+    mean = lambda xs: sum(xs) / len(xs)
+    d = [a - b for a, b in zip(kv, kb)]
+    dt = [a - b for a, b in zip(tv, tb)]
+    r = dict(n=n, base=mean(kb), var=mean(kv), d=mean(d), dtop=mean(dt),
+             wins=sum(1 for x in d if x < 0))
+    r["d_ci"] = boot(lambda ix: mean([d[i] for i in ix]), n)
+    r["rel"] = r["d"] / r["base"]
+    r["rel_ci"] = boot(lambda ix: mean([kv[i] for i in ix]) / mean([kb[i] for i in ix]) - 1, n, seed=1)
+    r["dtop_ci"] = boot(lambda ix: mean([dt[i] for i in ix]), n, seed=2)
+    if mib:
+        r["mib"] = mib
+        r["per100"] = r["d"] / mib * 100
+        # A negative delta (the variant is smaller) swaps the bounds.
+        r["per100_ci"] = tuple(sorted(x / mib * 100 for x in r["d_ci"]))
+    return r
+
+try:
+    mib = float(sys.argv[3]) if len(sys.argv) > 3 else None
+except ValueError:
+    fail("MIB_DELTA has to be a number, got %s" % sys.argv[3])
+
+r = measure(sys.argv[1], sys.argv[2], mib)
+print("chunks %d  base %.6f  variant %.6f" % (r["n"], r["base"], r["var"]))
+print("dKLD %+.6f  95%% CI [%+.6f, %+.6f]  rel %+.1f%% [%+.1f, %+.1f]  variant lower in %d/%d chunks"
+      % (r["d"], *r["d_ci"], 100 * r["rel"], 100 * r["rel_ci"][0], 100 * r["rel_ci"][1], r["wins"], r["n"]))
+print("d top-1 %+.3f pp  95%% CI [%+.3f, %+.3f]" % (r["dtop"], *r["dtop_ci"]))
+if "per100" in r:
+    print("per 100 MiB: %+.6f  [%+.6f, %+.6f]" % (r["per100"], *r["per100_ci"]))
+KLDDIFFEOF
 }
 
 bench() {
