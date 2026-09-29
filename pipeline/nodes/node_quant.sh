@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Quantize rungs of the reviewed ladder, verify each against the ladder, measure KLD, publish.
-# One rung at a time: quantize -> verify -> KLD -> upload -> delete (foundry ladder()).
+# Per rung: quantize -> verify -> KLD -> upload -> delete (foundry ladder()). Quantizing is CPU
+# work and KLD is GPU work, so the second half of a rung runs in the background while the next
+# rung quantizes: 16 rungs of a 27B take about the quantize time instead of quantize + KLD.
+# At most two rungs are on disk; when the next one would not fit, the node waits for the
+# previous one to finish first. QUANT_OVERLAP=0 goes back to one rung at a time.
 #
 # env: STEM, LLAMA_COMMIT, PROFILE (profiles/<name>.yaml); optional RUNGS (labels, default all
-#      non-control rungs of ladder.json), KLD=1, KEEP_FILES=0, EVALSET, CTX
+#      non-control rungs of ladder.json), KLD=1, KEEP_FILES=0, EVALSET, CTX, QUANT_OVERLAP=1
 # in:  $METRICS bf16/, inventory.json, imatrix/imatrix.gguf, kld/, ladder/ (written by the driver)
 # out: $MAIN <STEM>-<LABEL>.gguf (45 GB shards above 48 GB)
 #      $METRICS logs/quantize-<LABEL>.log, logs/kld-<EVALSET>--<STEM>-<LABEL>.log, results/rows/<name>.json
@@ -11,6 +15,7 @@
 : "${PROFILE:?PROFILE, e.g. dense-hybrid}"
 KLD=${KLD:-1}
 KEEP_FILES=${KEEP_FILES:-0}
+QUANT_OVERLAP=${QUANT_OVERLAP:-1}
 PROFILE_FILE=$PIPE/profiles/$PROFILE.yaml
 [ -f "$PROFILE_FILE" ] || fail 1 "no profile $PROFILE_FILE"
 
@@ -34,7 +39,7 @@ if bad:
     sys.exit(1)
 PY
 
-# rung table: label|ftype|file_type|imatrix|flags
+# rung table: label|ftype|file_type|imatrix|predicted bytes|flags
 RUNG_TABLE=$("$PY" - "$WORK/ladder/ladder.json" "${RUNGS:-}" <<'PY'
 import json, sys
 lad = json.load(open(sys.argv[1]))
@@ -42,7 +47,8 @@ want = sys.argv[2].split()
 for r in lad["rungs"]:
     if (want and r["label"] not in want) or (not want and r.get("control")):
         continue
-    print("|".join([r["label"], r["ftype"], str(r["file_type"] or ""), "1" if r["imatrix"] else "0", " ".join(r["flags"])]))
+    print("|".join([r["label"], r["ftype"], str(r["file_type"] or ""), "1" if r["imatrix"] else "0",
+                    str(r.get("predicted_bytes") or 0), " ".join(r["flags"])]))
 PY
 )
 [ -n "$RUNG_TABLE" ] || fail 1 "no rungs selected (RUNGS='${RUNGS:-}')"
@@ -81,14 +87,74 @@ if [ "$KLD" = 1 ]; then
 fi
 
 has_quant() { hf_has "$MAIN" model "$1.gguf" || hf_has "$MAIN" model "$1-00001-of-*.gguf"; }
+SPLIT_ABOVE=$(( 48 * 1024 ** 3 ))
+
+# The second half of a rung: KLD, results row, upload, delete. Runs in a background subshell,
+# so it does not call fail (that would print NODE_FAIL in the middle of the log and leave the
+# main loop running); it leaves the reason in $FIN_FAIL and exits, and wait_finish fails the node.
+FIN_FAIL=$WORK/quants/.finish-failed
+finish_rung() {  # LABEL NAME OUT QLOG KLOG SIZE FILE_TYPE QSEC
+    local LABEL=$1 NAME=$2 OUT=$3 QLOG=$4 KLOG=$5 SIZE=$6 FILE_TYPE=$7 QSEC=$8 START
+    stop() { echo "$2" > "$FIN_FAIL"; exit "$1"; }
+    if [ "$KLD" = 1 ]; then
+        START=$(date +%s)
+        stdbuf -oL -eL "$BIN/llama-perplexity" -m "$OUT" -f "$EVAL" --kl-divergence-base "$BASE" --kl-divergence \
+            "${KLD_ARGS[@]}" -ngl $NGL > "$KLOG" 2>&1 || { push_log "$KLOG"; stop 1 "$LABEL: KLD run failed"; }
+        "$PY" "$PIPE/lib/results.py" row --name "$NAME" --label "$LABEL" --kld "$KLOG" --quant-log "$QLOG" \
+            --size-bytes "$SIZE" ${FILE_TYPE:+--file-type "$FILE_TYPE"} --commit "$(cat "$LOGS/llama-commit.txt")" \
+            --evalset "$EVALSET" -o "$WORK/results/rows/$NAME.json" || stop 1 "$LABEL: results row failed"
+        say "$LABEL: $(grep -oP 'Mean\s+KLD:\s+\K[0-9.]+' "$KLOG") mean KLD, $(( SIZE / 1000000 )) MB, quantize ${QSEC}s, KLD $(( $(date +%s) - START ))s"
+    fi
+
+    # flat names at the root; above the 50 GB file limit, flat 45 GB shards (foundry push_model_split)
+    if [ "$SIZE" -gt "$SPLIT_ABOVE" ]; then
+        mkdir -p "$WORK/quants/split-$LABEL"
+        "$BIN/llama-gguf-split" --split --split-max-size 45G "$OUT" "$WORK/quants/split-$LABEL/$NAME" > "$LOGS/split-$LABEL.log" 2>&1 \
+            || stop 1 "$LABEL: llama-gguf-split failed"
+        hf_up_dir "$WORK/quants/split-$LABEL" . "$MAIN" model || stop 1 "$LABEL: upload failed"
+        rm -rf "$WORK/quants/split-$LABEL"
+    else
+        hf_up "$OUT" "$NAME.gguf" "$MAIN" model || stop 1 "$LABEL: upload failed"
+    fi
+    push_log "$QLOG"; push_log "$LOGS/verify-$LABEL.txt"
+    if [ "$KLD" = 1 ]; then
+        push_log "$KLOG"
+        hf_up "$WORK/results/rows/$NAME.json" "results/rows/$NAME.json" "$METRICS" dataset || stop 1 "$LABEL: row upload failed"
+    fi
+    [ "$KEEP_FILES" = 1 ] || rm -f "$OUT"
+    say "$LABEL: published"
+}
+
+FIN_PID=""; FIN_LABEL=""; FIN_SPLIT=0
+wait_finish() {  # wait for the rung in the background; its failure is the node's failure
+    [ -n "$FIN_PID" ] || return 0
+    local rc=0
+    wait "$FIN_PID" || rc=$?
+    FIN_PID=""
+    if [ "$rc" -ne 0 ]; then
+        fail "$rc" "$(cat "$FIN_FAIL" 2>/dev/null || echo "$FIN_LABEL: KLD/upload stopped with $rc, see the node log")"
+    fi
+    built=$(( built + 1 ))
+}
+drain() { [ -z "$FIN_PID" ] || wait "$FIN_PID" 2>/dev/null || true; FIN_PID=""; }   # before failing on the quantize side
+free_bytes() { df --output=avail -B1 "$WORK" | tail -1 | tr -d ' '; }
+rm -f "$FIN_FAIL"
 
 built=0; skipped=0
-while IFS='|' read -r LABEL FTYPE FILE_TYPE USE_IM FLAGS; do
+while IFS='|' read -r LABEL FTYPE FILE_TYPE USE_IM PRED FLAGS; do
     NAME=$STEM-$LABEL
     QLOG=$LOGS/quantize-$LABEL.log
     KLOG=$LOGS/kld-$EVALSET--$NAME.log
     if [ "$FORCE" != 1 ] && has_quant "$NAME" && { [ "$KLD" != 1 ] || hf_has "$METRICS" dataset "logs/kld-$EVALSET--$NAME.log"; }; then
         say "$LABEL already published and measured"; skipped=$(( skipped + 1 )); continue
+    fi
+    # room for this rung next to the one still being measured (and, above 48 GB, its split copy)
+    if [ -n "$FIN_PID" ]; then
+        NEED=$(( PRED * 105 / 100 + FIN_SPLIT + 5 * 1024 ** 3 ))
+        if [ "$QUANT_OVERLAP" != 1 ] || [ "$(free_bytes)" -lt "$NEED" ]; then
+            [ "$QUANT_OVERLAP" = 1 ] && say "$LABEL: waiting for $FIN_LABEL, $(( NEED / 1000000000 )) GB needed for both on disk"
+            wait_finish
+        fi
     fi
     OUT=$WORK/quants/$NAME.gguf
     args=(--tensor-type-file "$WORK/ladder/$LABEL.types")
@@ -97,45 +163,25 @@ while IFS='|' read -r LABEL FTYPE FILE_TYPE USE_IM FLAGS; do
     # shellcheck disable=SC2206
     [ -n "$FLAGS" ] && args+=($FLAGS)
 
-    say "$LABEL: quantizing ($FTYPE, ${FILE_TYPE:-own} file_type)"
+    say "$LABEL: quantizing ($FTYPE, ${FILE_TYPE:-own} file_type)${FIN_PID:+ while $FIN_LABEL is measured}"
     START=$(date +%s)
     stdbuf -oL -eL "$BIN/llama-quantize" "${args[@]}" "$BF16" "$OUT" "$FTYPE" "$(nproc)" > "$QLOG" 2>&1 \
-        || { rm -f "$OUT"; push_log "$QLOG"; fail 1 "$LABEL: llama-quantize failed, see $(basename "$QLOG")"; }
+        || { rm -f "$OUT"; push_log "$QLOG"; drain; fail 1 "$LABEL: llama-quantize failed, see $(basename "$QLOG")"; }
     QSEC=$(( $(date +%s) - START ))
     if ! "$PY" "$PIPE/lib/verify_quant.py" --inventory "$INVENTORY" --profile "$PROFILE_FILE" --label "$LABEL" \
             --log "$QLOG" --commit "$LLAMA_COMMIT" | tee "$LOGS/verify-$LABEL.txt"; then
-        rm -f "$OUT"; push_log "$QLOG"; push_log "$LOGS/verify-$LABEL.txt"
+        rm -f "$OUT"; push_log "$QLOG"; push_log "$LOGS/verify-$LABEL.txt"; drain
         fail 3 "$LABEL: the file is not what the ladder asked for, deleted"
     fi
     SIZE=$(stat -c %s "$OUT")
 
-    if [ "$KLD" = 1 ]; then
-        say "$LABEL: KLD"
-        stdbuf -oL -eL "$BIN/llama-perplexity" -m "$OUT" -f "$EVAL" --kl-divergence-base "$BASE" --kl-divergence \
-            "${KLD_ARGS[@]}" -ngl $NGL > "$KLOG" 2>&1 || { push_log "$KLOG"; fail 1 "$LABEL: KLD run failed"; }
-        "$PY" "$PIPE/lib/results.py" row --name "$NAME" --label "$LABEL" --kld "$KLOG" --quant-log "$QLOG" \
-            --size-bytes "$SIZE" ${FILE_TYPE:+--file-type "$FILE_TYPE"} --commit "$(cat "$LOGS/llama-commit.txt")" \
-            --evalset "$EVALSET" -o "$WORK/results/rows/$NAME.json"
-        say "$LABEL: $(grep -oP 'Mean\s+KLD:\s+\K[0-9.]+' "$KLOG") mean KLD, $(( SIZE / 1000000 )) MB, quantize ${QSEC}s"
-    fi
-
-    # flat names at the root; above the 50 GB file limit, flat 45 GB shards (foundry push_model_split)
-    if [ "$SIZE" -gt $(( 48 * 1024 ** 3 )) ]; then
-        mkdir -p "$WORK/quants/split-$LABEL"
-        "$BIN/llama-gguf-split" --split --split-max-size 45G "$OUT" "$WORK/quants/split-$LABEL/$NAME" > "$LOGS/split-$LABEL.log" 2>&1
-        hf_up_dir "$WORK/quants/split-$LABEL" . "$MAIN" model
-        rm -rf "$WORK/quants/split-$LABEL"
-    else
-        hf_up "$OUT" "$NAME.gguf" "$MAIN" model
-    fi
-    push_log "$QLOG"; push_log "$LOGS/verify-$LABEL.txt"
-    if [ "$KLD" = 1 ]; then
-        push_log "$KLOG"
-        hf_up "$WORK/results/rows/$NAME.json" "results/rows/$NAME.json" "$METRICS" dataset
-    fi
-    [ "$KEEP_FILES" = 1 ] || rm -f "$OUT"
-    built=$(( built + 1 ))
+    wait_finish   # one rung measured at a time: the GPUs hold one model
+    finish_rung "$LABEL" "$NAME" "$OUT" "$QLOG" "$KLOG" "$SIZE" "$FILE_TYPE" "$QSEC" &
+    FIN_PID=$!; FIN_LABEL=$LABEL
+    FIN_SPLIT=0; [ "$SIZE" -gt "$SPLIT_ABOVE" ] && FIN_SPLIT=$SIZE
+    [ "$QUANT_OVERLAP" = 1 ] || wait_finish
 done <<< "$RUNG_TABLE"
+wait_finish
 
 push_log "$LOGS/llama-commit.txt"; push_log "$LOGS/env-$NODE.txt"
 done_node "\"built\": $built, \"skipped\": $skipped"

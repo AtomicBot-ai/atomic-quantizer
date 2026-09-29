@@ -31,11 +31,12 @@ died is resumed by running the same command again. The hub is the only state.
 | `lib/node_common.sh` | the node contract, hub helpers, pinned llama.cpp build |
 | `nodes/node_convert.sh` | HF -> BF16 GGUF (MTP kept) + mmproj + inventory, published to the metrics repo |
 | `nodes/node_base.sh` | KLD reference over eval/neutral, with the self-check (reference vs itself = 0) |
-| `nodes/node_imatrix.sh` | imatrix shards on GPU pairs or several boxes, merge + statistics |
-| `nodes/node_quant.sh` | per rung: quantize -> verify -> KLD -> upload -> delete |
+| `nodes/node_prepare.sh` | a freshly rented extra box: packages, venv, the pinned llama.cpp build, while the model still converts elsewhere |
+| `nodes/node_imatrix.sh` | imatrix shards on GPU pairs or several boxes (`IM_MERGE=0` computes only, `only` merges what is on the hub), merge + statistics + coverage/convergence report (`lib/im_report.py`) |
+| `nodes/node_quant.sh` | per rung: quantize -> verify -> KLD -> upload -> delete; the next rung quantizes (CPU) while the previous one is measured (GPU), at most two on disk |
 | `nodes/node_abliterate.sh` | Heretic, integrity of the saved checkpoint, gate on refusals and KL |
 | `nodes/node_nvfp4.sh` | llm-compressor NVFP4 calibrated on the same corpus build |
-| `driver/release.py` | stages, hub state, box rental, run log (`runs/<stem>-<time>/run.jsonl`); `--quant-boxes N` spreads the rungs over N boxes |
+| `driver/release.py` | stages, hub state, box rental, run log (`runs/<stem>-<time>/run.jsonl`); `--im-boxes N` spreads the imatrix shards over N boxes rented while the model converts, `--quant-boxes N` the rungs, `--quant-batch` rungs per node call |
 | `driver/vast.py`, `driver/remote.py` | rent/probe/destroy (port of atomic-forge rent_race.sh); ssh or `docker exec`, tmux, follow |
 | `tests/` | replay of the published releases and of the Qwen3.5-4B masks, the 2B smoke ladder, refusal cases, results schema, card |
 | `tests/fixtures/` | logs of runs that were never published (the 4B masks, the 2B smoke run), with their provenance |
@@ -173,7 +174,7 @@ listed when the stage ends.
 ## Not done yet
 
 - speed numbers (llama-bench) and the vision check in the card;
-- imatrix shards across several boxes (the node is written for it, the driver
-  runs all shards on the gguf box); quant rungs do spread (`--quant-boxes`);
+- the base reference still runs on the gguf box before its own shards, so with
+  `--im-boxes` box 0 finishes its shards ~5 min after the others;
 - MoE profile values for a Qwen-style MoE (Flash-Next tensor names were never
   published); the generator will list every uncovered group on the day.

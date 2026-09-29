@@ -7,7 +7,9 @@
 # boxes; the box that owns index 0 merges once every shard is on the hub.
 #
 # env: STEM, LLAMA_COMMIT, RECIPE (calib-corpora build), IM_TOTAL, IM_INDEX; optional
-#      IM_CTX=512, IM_BATCH=8192, IM_WAIT_MIN=240
+#      IM_CTX=512, IM_BATCH=8192, IM_WAIT_MIN=240, IM_MERGE=1 (0: compute the shards of IM_INDEX
+#      and stop; only: compute nothing, merge the shards already on the hub. release.py --im-boxes
+#      runs 0 on every box side by side, then only on box 0)
 # out: $METRICS imatrix/shard-I-of-N.gguf, imatrix/imatrix.gguf, imatrix/imatrix.stats.txt
 . "${PIPE:-/opt/pipeline}/lib/node_common.sh"
 : "${RECIPE:?RECIPE, the calib-corpora build name, e.g. qwen3.8-27b}"
@@ -16,6 +18,8 @@ IM_INDEX=${IM_INDEX:-$(seq -s ' ' 0 $(( IM_TOTAL - 1 )))}
 IM_CTX=${IM_CTX:-512}
 IM_BATCH=${IM_BATCH:-auto}
 IM_WAIT_MIN=${IM_WAIT_MIN:-240}
+IM_MERGE=${IM_MERGE:-1}
+[ "$IM_MERGE" = only ] && IM_INDEX=""
 IMD=$WORK/imatrix
 
 if [ "$FORCE" != 1 ] && hf_has "$METRICS" dataset "imatrix/imatrix.gguf"; then
@@ -46,7 +50,7 @@ set -- $IM_INDEX
 LOCAL=$#
 ensure_inventory
 if [ "$NGPU" -gt 0 ]; then
-    GPER=$(( NGPU / LOCAL ))
+    GPER=$(( NGPU / (LOCAL > 0 ? LOCAL : 1) ))
     [ "$GPER" -ge 1 ] || fail 1 "$LOCAL shards on $NGPU GPUs"
     # weights + logits (batch x vocab x 4 bytes) must fit the GPUs a shard gets (foundry im_shard)
     VOCAB=$("$PY" -c "
@@ -106,7 +110,11 @@ for I in $IM_INDEX; do
 done
 for p in "${pids[@]}"; do wait "$p" || fail 1 "a shard failed, see logs/imatrix-shard-*.log"; done
 
-case " $IM_INDEX " in *" 0 "*) ;; *) done_node "\"shards\": \"$IM_INDEX\", \"merged\": false" ;; esac
+case "$IM_MERGE" in
+    only) ;;
+    1) case " $IM_INDEX " in *" 0 "*) ;; *) done_node "\"shards\": \"$IM_INDEX\", \"merged\": false" ;; esac ;;
+    *) done_node "\"shards\": \"$IM_INDEX\", \"merged\": false" ;;
+esac
 
 # index 0 merges once every shard is on the hub
 deadline=$(( $(date +%s) + IM_WAIT_MIN * 60 ))
@@ -143,4 +151,25 @@ hf_up "$IMD/imatrix.gguf" imatrix/imatrix.gguf "$METRICS" dataset
 hf_up "$IMD/imatrix.stats.txt" imatrix/imatrix.stats.txt "$METRICS" dataset
 hf_up "$IMD/params.txt" imatrix/params.txt "$METRICS" dataset
 hf_up "$WORK/corpus/manifest.json" imatrix/corpus-manifest.json "$METRICS" dataset
-done_node "\"shards\": $IM_TOTAL, \"chunks\": $CHUNKS, \"capped\": $CAPPED, \"entries\": \"${ENTRIES:-?}\", \"merged\": true"
+
+# Coverage and convergence (lib/im_report.py): dead experts by name, and the first half of
+# the shards against all of them, which is N against 2N chunks since shards add up. Either
+# failing stops the run before any rung: at 1-3 bits a dead expert is noise, and a matrix
+# that still moves is the corpus talking, not the model. The matrix is already on the hub,
+# so running the stage again skips this node and goes on with it: the stop is a look, not a
+# loss. A capped test matrix (IM_MAX_CHUNKS) never stops the run, nor does IM_ACCEPT=1.
+IM_VS=""
+if [ "$IM_TOTAL" -ge 2 ]; then
+    IM_VS="--vs $(ls "$WORK"/imdl/imatrix/shard-*-of-$IM_TOTAL.gguf | sort -V | head -n $(( IM_TOTAL / 2 )) | paste -sd, -)"
+fi
+IM_RC=0
+"$PY" "$PIPE/lib/im_report.py" all "$IMD/imatrix.gguf" $IM_VS --inventory "$INVENTORY" \
+    --json "$IMD/im-report.json" > "$LOGS/imatrix-report.log" 2>&1 || IM_RC=$?
+cat "$LOGS/imatrix-report.log"
+push_log "$LOGS/imatrix-report.log"
+[ -f "$IMD/im-report.json" ] && hf_up "$IMD/im-report.json" imatrix/im-report.json "$METRICS" dataset
+if [ "$IM_RC" -ne 0 ] && [ "$CAPPED" != 1 ] && [ "${IM_ACCEPT:-0}" != 1 ]; then
+    [ "$IM_RC" -eq 3 ] || fail 1 "im_report.py failed ($IM_RC), see imatrix-report.log"
+    fail 3 "dead experts or not converged (imatrix-report.log): add the missing domain and recompute a shard, or run the stage again to go on with this matrix"
+fi
+done_node "\"shards\": $IM_TOTAL, \"chunks\": $CHUNKS, \"capped\": $CAPPED, \"entries\": \"${ENTRIES:-?}\", \"merged\": true, \"report\": $IM_RC"
