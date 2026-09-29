@@ -35,7 +35,7 @@ died is resumed by running the same command again. The hub is the only state.
 | `nodes/node_quant.sh` | per rung: quantize -> verify -> KLD -> upload -> delete |
 | `nodes/node_abliterate.sh` | Heretic, integrity of the saved checkpoint, gate on refusals and KL |
 | `nodes/node_nvfp4.sh` | llm-compressor NVFP4 calibrated on the same corpus build |
-| `driver/release.py` | stages, hub state, box rental, run log (`runs/<stem>-<time>/run.jsonl`) |
+| `driver/release.py` | stages, hub state, box rental, run log (`runs/<stem>-<time>/run.jsonl`); `--quant-boxes N` spreads the rungs over N boxes |
 | `driver/vast.py`, `driver/remote.py` | rent/probe/destroy (port of atomic-forge rent_race.sh); ssh or `docker exec`, tmux, follow |
 | `tests/` | replay of the published releases and of the Qwen3.5-4B masks, the 2B smoke ladder, refusal cases, results schema, card |
 | `tests/fixtures/` | logs of runs that were never published (the 4B masks, the 2B smoke run), with their provenance |
@@ -173,7 +173,7 @@ listed when the stage ends.
 ## Not done yet
 
 - speed numbers (llama-bench) and the vision check in the card;
-- runs across several boxes (imatrix shards and quant rungs are written for it,
-  the driver rents one box per stage group);
+- imatrix shards across several boxes (the node is written for it, the driver
+  runs all shards on the gguf box); quant rungs do spread (`--quant-boxes`);
 - MoE profile values for a Qwen-style MoE (Flash-Next tensor names were never
   published); the generator will list every uncovered group on the day.

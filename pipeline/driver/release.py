@@ -3,7 +3,7 @@
 
     release.py status --model Qwen/Qwen3.8-27B
     release.py gguf   --model Qwen/Qwen3.8-27B --recipe qwen3.8-27b --profile dense-hybrid \
-                      --llama-commit 1692f9e50bb2... [--repo-suffix -rehearsal] [--ladder-ok]
+                      --llama-commit 1692f9e50bb2... [--repo-suffix=-rehearsal] [--ladder-ok]
     release.py ladder --model ... --profile ...          # generate + review + upload ladder/ only
     release.py results --model ...                       # merge results/rows into results.json
     release.py card   --model ... [--card-overwrite]     # README draft from results.json
@@ -33,8 +33,10 @@ import json
 import math
 import os
 import re
+import queue
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -76,13 +78,18 @@ class Run:
         os.makedirs(self.dir, exist_ok=True)
         self.log = open(os.path.join(self.dir, "run.jsonl"), "a") if journal else None
         self.boxes = []
+        self.lock = threading.Lock()   # quant boxes work side by side (quant_fanout)
 
     def event(self, kind, **kw):
         rec = {"t": time.strftime("%FT%TZ", time.gmtime()), "event": kind, **kw}
-        if self.log:
-            self.log.write(json.dumps(rec) + "\n")
-            self.log.flush()
-        print(f"== {kind} " + " ".join(f"{k}={v}" for k, v in kw.items() if k not in ("offer",)), flush=True)
+        with self.lock:
+            if self.log:
+                try:
+                    self.log.write(json.dumps(rec) + "\n")
+                    self.log.flush()
+                except OSError:   # a full disk here must not stop the run or keep boxes alive
+                    pass
+            vast.say(f"== {kind} " + " ".join(f"{k}={v}" for k, v in kw.items() if k not in ("offer",)))
 
     def fetch(self, repo, kind, pattern):
         """Files from our repos into the run folder; returns their local paths."""
@@ -140,10 +147,33 @@ def box_plan(size_b, gpu_query=None, disk_gb=None):
     return q, disk
 
 
+def quant_box_plan(size_b, gpu_query=None, disk_gb=None):
+    """An extra box that only quantizes and measures: cores and RAM for llama-quantize, a GPU for KLD.
+
+    KLD stays on the GPU the reference was written on (the published protocol names it), so the
+    default is the same card as box_plan, fewer of them: the largest rung (Q8_0) must fit.
+    Disk: the BF16, the KLD reference twice while its parts are joined, the largest rung.
+    """
+    s = size_b / 1e9
+    if gpu_query:
+        q = gpu_query
+    elif s <= 20:
+        q = "gpu_name in [RTX_4090,RTX_5090] num_gpus>=1 cpu_cores_effective>=16 cpu_ram>=64"
+    elif s <= 60:
+        q = "gpu_name=RTX_5090 num_gpus>=2 cpu_cores_effective>=32 cpu_ram>=128"
+    else:
+        q = box_plan(size_b)[0]
+    if "cuda_max_good" not in q:
+        q += " cuda_max_good>=13.0"
+    return q, disk_gb or int(s + 2 * 90 + 0.55 * s + 40)
+
+
 def open_box(run, a, stage, query=None, disk=None, size_b=None):
     """A vast box for the stage, or with --local-box a local container. Released by close_boxes."""
     if a.local_box:
-        name = re.sub(r"[^A-Za-z0-9_.-]", "-", f"release-{run.stem}-{stage}")
+        # the run's time stamp in the name: docker_box removes any container of the same name, and two
+        # local runs of one model (two checkouts) used to take each other's containers away
+        name = re.sub(r"[^A-Za-z0-9_.-]", "-", f"release-{os.path.basename(run.dir)}-{stage}")
         run.event("box", box="docker", name=name)
         box = remote.docker_box(name, a.local_hub)
     else:
@@ -152,8 +182,13 @@ def open_box(run, a, stage, query=None, disk=None, size_b=None):
         run.event("rent", stage=stage, query=query, disk_gb=disk)
         box = vast.rent(query, disk, f"release:{os.path.basename(run.dir)}:{stage}", a.ssh_key, race=a.race)
         run.event("box", iid=box["iid"], gpu=box["gpu"], dph=box["dph"], host=box["host"])
-    run.boxes.append(box)
-    remote.bootstrap(box, a.ssh_key, with_token=not a.local_hub)
+    with run.lock:
+        run.boxes.append(box)
+    try:
+        remote.bootstrap(box, a.ssh_key, with_token=not a.local_hub)
+    except Exception:
+        close_box(run, a, box)   # a box that never ran a node is not kept for the end of the run
+        raise
     if a.local_hub and box.get("kind") != "docker":
         # the hub lives on the box: the nodes see /hub, this driver sees the same folder over ssh
         remote.run(box, a.ssh_key, f"mkdir -p {BOX_HUB}")
@@ -170,24 +205,34 @@ def box_hub(a, box):
 
 
 def close_boxes(run, a):
-    for b in run.boxes:
-        if a.local_hub and b.get("kind") != "docker":
-            # bring the run home before the box goes: logs and numbers always, blobs only when asked
-            try:
-                got = remote.pull(b, a.ssh_key, BOX_HUB, a.local_hub, max_mb=a.pull_max_mb)
-                run.event("pull", into=a.local_hub, max_mb=a.pull_max_mb, bytes=got)
-            except (RuntimeError, subprocess.TimeoutExpired) as e:
-                run.event("pull_failed", error=str(e)[:200])
-            os.environ["LOCAL_HUB"] = a.local_hub
-        hours = (time.time() - b["t_rented"]) / 3600
-        run.event("release_box", iid=b["iid"], hours=round(hours, 2), cost=round(hours * float(b["dph"] or 0), 2))
-        if a.keep_box:
-            vast.keep(b["iid"]) if b.get("kind") != "docker" else print(f"   kept container {b['name']}")
-        elif b.get("kind") == "docker":
-            remote.docker_destroy(b)
-        else:
-            vast.destroy(b["iid"])
-    run.boxes = []
+    for b in list(run.boxes):
+        try:
+            close_box(run, a, b)
+        except Exception as e:   # the next box still goes; vast's atexit tries this one again
+            vast.say(f"[driver] releasing {b.get('iid')} failed: {e}")
+
+
+def close_box(run, a, b):
+    with run.lock:
+        if b not in run.boxes:
+            return
+        run.boxes.remove(b)
+    if a.local_hub and b.get("kind") != "docker":
+        # bring the run home before the box goes: logs and numbers always, blobs only when asked
+        try:
+            got = remote.pull(b, a.ssh_key, BOX_HUB, a.local_hub, max_mb=a.pull_max_mb)
+            run.event("pull", into=a.local_hub, max_mb=a.pull_max_mb, bytes=got)
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            run.event("pull_failed", error=str(e)[:200])
+        os.environ["LOCAL_HUB"] = a.local_hub
+    hours = (time.time() - b["t_rented"]) / 3600
+    run.event("release_box", iid=b["iid"], hours=round(hours, 2), cost=round(hours * float(b["dph"] or 0), 2))
+    if a.keep_box:
+        vast.keep(b["iid"]) if b.get("kind") != "docker" else print(f"   kept container {b['name']}")
+    elif b.get("kind") == "docker":
+        remote.docker_destroy(b)
+    else:
+        vast.destroy(b["iid"])
 
 
 def node(run, a, box, name, **env):
@@ -195,14 +240,74 @@ def node(run, a, box, name, **env):
                REPO_SUFFIX=run.suffix or None, FORCE="1" if a.force else None, LOCAL_HUB=box_hub(a, box),
                CTX=getattr(a, "ctx", None), KLD_CHUNKS=getattr(a, "kld_chunks", None),
                IM_MAX_CHUNKS=getattr(a, "im_max_chunks", None))
-    run.event("node", node=name, **{k: v for k, v in env.items() if v is not None and k != "LLAMA_REPO"})
+    tag = f"{name}@{box['iid']}" if len(run.boxes) > 1 else name
+    run.event("node", node=name, box=box["iid"], **{k: v for k, v in env.items() if v is not None and k != "LLAMA_REPO"})
     t0 = time.time()
-    ok, info = remote.run_node(box, a.ssh_key, name, env, on_line=lambda l: print(f"  [{name}] {l}", flush=True),
+    ok, info = remote.run_node(box, a.ssh_key, name, env, on_line=lambda l: vast.say(f"  [{tag}] {l}"),
                                max_hours=a.max_hours)
-    run.event("node_done" if ok else "node_failed", node=name, minutes=round((time.time() - t0) / 60, 1), info=info)
+    run.event("node_done" if ok else "node_failed", node=name, box=box["iid"], minutes=round((time.time() - t0) / 60, 1),
+              info=info)
     if not ok:
         raise SystemExit(f"{name} failed: {info}")
     return info
+
+
+def pending_rungs(run, only=None):
+    """(label, predicted bytes) of the ladder rungs not yet published and measured, largest first."""
+    lad = json.load(open(run.fetch(run.metrics, "dataset", "ladder/ladder.json")[0]))
+    size = {r["label"]: r.get("predicted_bytes") or 0 for r in lad["rungs"]}
+    todo = [label for label, done in stage_state(run, only)[1] if not done]
+    return sorted(((l, size[l]) for l in todo), key=lambda x: -x[1])
+
+
+def quant_fanout(run, a, first, rungs, extra, open_extra, work, release):
+    """Rungs over several boxes: a queue in the driver, one node_quant per rung, largest rungs first.
+
+    `first` (the box that made the imatrix, or None) starts at once; `extra` more boxes are
+    opened side by side by `open_extra(i)` and join the queue when they are up (a rental that
+    fails costs only its own share). A box is released as soon as the queue has nothing for it.
+    Each rung runs alone, so a box never holds the queue hostage: the others take what is left.
+    The first failure stops every box from taking a new rung; rungs already running finish.
+    Returns the list of failures (label, error).
+    """
+    q = queue.Queue()
+    for label, _ in rungs:
+        q.put(label)
+    failed, stop = [], threading.Event()
+
+    def worker(box, i):
+        try:
+            if box is None:
+                if stop.is_set() or q.empty():
+                    return
+                try:
+                    box = open_extra(i)
+                except (Exception, SystemExit) as e:
+                    run.event("quant_box_failed", slot=i, error=str(e)[:200])
+                    return
+            while not stop.is_set():
+                try:
+                    label = q.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    work(box, label)
+                except (Exception, SystemExit) as e:
+                    failed.append((label, str(e)[:300]))
+                    stop.set()
+        finally:
+            if box is not None and box is not first:
+                release(box)
+
+    threads = [threading.Thread(target=worker, args=(first, 0), daemon=True)] if first is not None else []
+    threads += [threading.Thread(target=worker, args=(None, i), daemon=True) for i in range(1, extra + 1)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if not failed and not q.empty():
+        failed.append((q.get_nowait(), "no box was left to take it"))
+    return failed
 
 
 def ladder_stage(run, a):
@@ -304,11 +409,32 @@ def cmd_gguf(a):
         if not stage_state(run)[0]["ladder"]:
             ladder_stage(run, a)
         if not stage_state(run, a.only_rungs)[0]["quant"]:
-            node(run, a, box, "node_quant", PROFILE=a.profile, RUNGS=" ".join(a.only_rungs or []) or None)
+            if a.quant_boxes > 1:
+                quant_stage(run, a, box)
+            else:
+                node(run, a, box, "node_quant", PROFILE=a.profile, RUNGS=" ".join(a.only_rungs or []) or None)
         results_stage(run)
         card_stage(run, a)
     finally:
         close_boxes(run, a)
+
+
+def quant_stage(run, a, box):
+    """--quant-boxes N: the rungs over this box and N-1 more (quant_fanout)."""
+    rungs = pending_rungs(run, a.only_rungs)
+    extra = min(a.quant_boxes - 1, max(len(rungs) - 1, 0))
+    size_b = None if a.local_box else model_bytes(run.model)
+    q, disk = (None, None) if a.local_box else quant_box_plan(size_b, a.quant_gpu_query, a.quant_disk_gb)
+    run.event("quant_fanout", rungs=[l for l, _ in rungs], boxes=1 + extra, query=q, disk_gb=disk)
+    failed = quant_fanout(
+        run, a, box, rungs, extra,
+        open_extra=lambda i: open_box(run, a, f"quant-{i}", q, disk),
+        work=lambda b, label: node(run, a, b, "node_quant", PROFILE=a.profile, RUNGS=label),
+        release=lambda b: close_box(run, a, b))
+    if failed:
+        for label, err in failed:
+            run.event("quant_failed", rung=label, error=err)
+        raise SystemExit(f"{len(failed)} rung(s) failed: {', '.join(l for l, _ in failed)}; rerun to resume")
 
 
 def cmd_ladder(a):
@@ -334,7 +460,7 @@ def cmd_ablit(a):
                    MAX_REFUSALS=a.max_refusals, MAX_KL=a.max_kl, RESUME="1" if a.resume else None, STEM=run.stem,
                    FORCE="1" if a.force else None)
         ok, info = remote.run_node(box, a.ssh_key, "node_abliterate", env,
-                                   on_line=lambda l: print(f"  [ablit] {l}", flush=True), max_hours=a.max_hours)
+                                   on_line=lambda l: vast.say(f"  [ablit] {l}"), max_hours=a.max_hours)
         run.event("node_done" if ok else "node_failed", node="node_abliterate", info=info)
         if not ok:
             raise SystemExit(f"abliteration failed or gate not passed: {info}. Pick another TRIAL_INDEX and rerun with --resume --force")
@@ -352,7 +478,7 @@ def cmd_nvfp4(a):
         box = open_box(run, a, "nvfp4", q, disk)
         env = dict(MODEL=run.model, TARGET_NVFP4=target, RECIPE=a.recipe, STEM=run.stem, FORCE="1" if a.force else None)
         ok, info = remote.run_node(box, a.ssh_key, "node_nvfp4", env,
-                                   on_line=lambda l: print(f"  [nvfp4] {l}", flush=True), max_hours=a.max_hours)
+                                   on_line=lambda l: vast.say(f"  [nvfp4] {l}"), max_hours=a.max_hours)
         run.event("node_done" if ok else "node_failed", node="node_nvfp4", info=info)
         if not ok:
             raise SystemExit(f"nvfp4 failed: {info}")
@@ -402,6 +528,10 @@ def main():
     p.add_argument("--keep-mtp", default="1")
     p.add_argument("--im-shards", type=int)
     p.add_argument("--only-rungs", nargs="*")
+    p.add_argument("--quant-boxes", type=int, default=1,
+                   help="quantize and measure the rungs on this many boxes side by side (the first is the gguf box)")
+    p.add_argument("--quant-gpu-query", help="vast query for the extra quant boxes (default: quant_box_plan)")
+    p.add_argument("--quant-disk-gb", type=int)
     p.add_argument("--ladder-ok", action="store_true", help="skip the interactive ladder review")
     p.add_argument("--ctx", type=int, help="KLD context (default 4096, the published protocol)")
     p.add_argument("--kld-chunks", type=int, help="KLD chunks (default all); a smaller number is for test runs")
@@ -431,6 +561,8 @@ def main():
         os.environ["LOCAL_HUB"] = a.local_hub
     if a.local_box and not a.local_hub:
         sys.exit("--local-box needs --local-hub: the container can not write to the real hub without a token")
+    if getattr(a, "quant_boxes", 1) > 1 and a.local_hub and not a.local_box:
+        sys.exit("--quant-boxes needs a hub every box can reach: the real one, or --local-box containers")
     if a.local_hub and a.cmd in ("ablit", "nvfp4") and not a.local_box:
         sys.exit("--local-hub needs --local-box for ablit and nvfp4: those nodes publish to the hub")
     if not a.local_hub:
