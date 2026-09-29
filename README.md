@@ -3,7 +3,7 @@
 The quantization pipeline behind every GGUF and MLX release under the
 [AtomicChat](https://huggingface.co/AtomicChat) organisation on Hugging Face.
 
-Two shell files. You copy one onto a rented machine, source it, and call
+A few shell files, one per route. You copy one onto a rented machine, source it, and call
 functions one at a time in the foreground. Nothing runs in the background,
 nothing is hidden, and every function says what it is doing and stops loudly
 when something is missing.
@@ -13,6 +13,7 @@ when something is missing.
 | `foundry.sh` | the GGUF side. Box setup, llama.cpp build, corpus, imatrix, quantize ladder, KLD, uploads |
 | `foundry-mlx3.sh` | the MLX side. Self contained, does not need `foundry.sh` |
 | `foundry-nvfp4.sh` | the NVFP4 side, DeepSeek-V4.1-Flash only. Calibration by NVIDIA's recipe on one box, measurement on a Blackwell box. See [docs/runbook-nvfp4.md](docs/runbook-nvfp4.md) |
+| `foundry-image.sh` | the image side, Qwen-Image-2.1 only, on stable-diffusion.cpp. Denoiser GGUFs sized against the other publishers' files and measured as LPIPS against the bf16 render. See [docs/runbook-image.md](docs/runbook-image.md) |
 | `auto_fmt.py` | generic chat renderer. The canonical copy lives in `calib-corpora/tools/` |
 | `scripts/bonsai/` | refusal ablation on the ternary Bonsai pack, where a weight edit cannot survive requantization. See [docs/runbook-bonsai-abliterate.md](docs/runbook-bonsai-abliterate.md) |
 
@@ -411,6 +412,7 @@ anything.
 | [docs/pipeline-map.md](docs/pipeline-map.md) | first. What lives in which repository and which directory |
 | [docs/runbook-gguf.md](docs/runbook-gguf.md) | a full GGUF release, with the reasoning behind each step |
 | [docs/runbook-mlx.md](docs/runbook-mlx.md) | a full MLX release |
+| [docs/runbook-image.md](docs/runbook-image.md) | a GGUF release of an image model, Qwen-Image-2.1 on stable-diffusion.cpp |
 | [docs/imatrix-sharding.md](docs/imatrix-sharding.md) | the sharding scheme in detail |
 | [docs/renting-boxes.md](docs/renting-boxes.md) | picking hardware, and what the money goes on |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | the failures that cost hours the first time |
