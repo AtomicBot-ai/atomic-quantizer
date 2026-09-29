@@ -14,6 +14,14 @@
 # first 4 and last 12, mid = the 8 after the head (write_ladder comment: edge
 # weighting halves the divergence at one size class). As fractions they scale
 # to another depth instead of lifting every block of a small model.
+# Checked on Qwen3.5-4B (2026-09-29): the measured scan (lib/scan.py) ranks the
+# ffn quarters tail > head > third > second, and bands built from it tie with
+# these fractions at three band sizes; bands from imatrix Sum(Act^2)
+# (lib/band_select.py) take only the tail and lose 9-21 % (README, "Choosing
+# the bands"). On Qwen3.8-27B the scan put the whole edge band in the tail and
+# beat these fractions by 4.6 % at AD-IQ3_S (ties at Q5/IQ4): run the scan on
+# a new model and pass its bands with --bands-from; the fractions are the
+# fallback.
 #
 # Small models of the line (0.8B to 9B) tie the embedding to the head: there is
 # no output.weight and token_embd.weight is the head. The August ladder knew

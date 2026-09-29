@@ -4,6 +4,11 @@
     ladder_gen.py --inventory inventory.json --profile profiles/dense-hybrid.yaml --out ladder/
     ladder_gen.py --inventory inventory.json --profile ... --explain AD-Q4_K_M
     ladder_gen.py --inventory inventory.json --profile ... --compare-log quantize-AD-Q4_K.log --label AD-Q4_K_M
+    ladder_gen.py --inventory inventory.json --profile ... --bands-from bands.json --out ladder/
+
+Bands come from the profile (fractions of the depth, counts, or block lists)
+or, with --bands-from, from band_select.py (imatrix statistics) or scan.py
+(measured sensitivity) as explicit edge/mid block lists.
 
 The profile says which tensor roles exist and which type each rung gives them.
 This script turns that into ordered llama-quantize rules, then simulates
@@ -115,15 +120,45 @@ def block_of(name):
     return int(m.group(1)) if m else None
 
 
-def compute_bands(profile, inv):
+def explicit_bands(edge, mid, blocks, source):
+    """Bands given as block lists (profile edge_blocks/mid_blocks, or --bands-from a band_select/scan file)."""
+    edge, mid = [int(b) for b in edge or []], [int(b) for b in mid or []]
+    for name, xs in (("edge", edge), ("mid", mid)):
+        if len(set(xs)) != len(xs):
+            raise LadderError(f"{source}: {name} band lists a block twice: {xs}")
+        stray = sorted(set(xs) - set(blocks))
+        if stray:
+            raise LadderError(f"{source}: {name} band names blocks {stray} that do not carry the band group")
+    both = sorted(set(edge) & set(mid))
+    if both:
+        raise LadderError(f"{source}: blocks {both} are in both the edge and the mid band")
+    return {"edge": sorted(edge), "mid": sorted(mid), "eligible": blocks}
+
+
+def compute_bands(profile, inv, override=None):
+    """Blocks of the edge and mid bands.
+
+    From the profile: fractions or counts of the depth (head/tail/mid), or
+    explicit edge_blocks/mid_blocks. override ({"edge": [...], "mid": [...]},
+    what band_select.py and scan.py write) replaces whatever the profile says.
+    """
     spec = profile.get("bands") or {}
     if not spec:
+        if override:
+            raise LadderError(f"profile {profile['name']} has no bands to override")
         return {}
     group = re.compile(spec["group"])
     mtp = set(inv.get("mtp_blocks") or [])
     blocks = sorted({block_of(t["name"]) for t in inv["tensors"] if group.search(t["name"])} - mtp - {None})
     if not blocks:
         raise LadderError(f"band group {spec['group']!r} matches no tensor in the inventory")
+    if override:
+        return explicit_bands(override.get("edge"), override.get("mid"), blocks, override.get("source", "bands file"))
+    if "edge_blocks" in spec or "mid_blocks" in spec:
+        counted = [k for k in spec if k.startswith(("head", "tail", "mid")) and k != "mid_blocks"]
+        if counted:
+            raise LadderError(f"{profile['name']}: bands give both block lists and counts ({counted})")
+        return explicit_bands(spec.get("edge_blocks"), spec.get("mid_blocks"), blocks, profile["name"])
     def count(key):
         # a band is either a block count or a fraction of the depth (half rounds up, so 64 blocks
         # at 0.0625/0.1875/0.125 give exactly the August 4/12/8)
@@ -277,12 +312,14 @@ def file_type(profile, eff, inv):
     return FILE_TYPE_OF.get(max(counts, key=counts.get)) if counts else None
 
 
-def build(profile, inv, only=None):
-    bands = compute_bands(profile, inv)
+def build(profile, inv, only=None, bands_override=None):
+    bands = compute_bands(profile, inv, bands_override)
     out = {"profile": profile["name"], "inventory": inv.get("source"), "arch": inv.get("arch"),
            "block_count": inv.get("block_count"), "mtp_blocks": inv.get("mtp_blocks"),
            "tied_embeddings": tied(profile, inv),
            "bands": {k: v for k, v in bands.items() if k != "eligible"}, "rungs": []}
+    if bands_override:
+        out["bands_from"] = {k: bands_override.get(k) for k in ("method", "source", "select") if k in bands_override}
     problems = {}
     for rung in profile["rungs"]:
         if only and rung["label"] not in only:
@@ -353,12 +390,22 @@ def main():
     ap.add_argument("--compare-log")
     ap.add_argument("--label")
     ap.add_argument("--skip", help="regex of tensor names to leave out of --compare-log")
+    ap.add_argument("--bands-from", help="bands.json from band_select.py or scan.py: explicit edge/mid blocks")
     a = ap.parse_args()
 
     with open(a.inventory) as f:
         inv = json.load(f)
     profile = load_profile(a.profile)
-    ladder, problems = build(profile, inv, a.only)
+    override = None
+    if a.bands_from:
+        with open(a.bands_from) as f:
+            override = json.load(f)
+        override.setdefault("source", os.path.basename(a.bands_from))
+    try:
+        ladder, problems = build(profile, inv, a.only, override)
+    except LadderError as e:
+        print(f"ladder_gen: {e}", file=sys.stderr)
+        return 2
 
     print(f"{profile['name']}: {inv.get('arch')}, {inv.get('block_count')} blocks, mtp {inv.get('mtp_blocks')}, "
           f"bands {ladder['bands']}" + (f", token_embd is the head (takes {ladder['tied_embeddings']})"
