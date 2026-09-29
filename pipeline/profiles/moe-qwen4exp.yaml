@@ -32,7 +32,9 @@
 #
 # Bands: gate/up of the band blocks get one or two steps more. The default is
 # the August Flash-Next band as fractions of the depth (blocks 0-3 and 40-47 of
-# 48). On the day, pick it from the imatrix instead:
+# 48). band_select does not reproduce it on the August matrix (36-47 by expert
+# energy, which grows with depth; 7 of 12 by attn_gate; runbooks/flash-next-imatrix.md),
+# so the fractions stay until a measurement or the new matrix says otherwise:
 #   im_report.py stats imatrix.gguf -o stats.txt
 #   band_select.py stats.txt --inventory inventory.json --profile profiles/moe-qwen4exp.yaml -o bands.json
 #   ladder_gen.py ... --bands-from bands.json

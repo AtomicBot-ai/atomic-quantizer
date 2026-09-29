@@ -27,7 +27,10 @@ Check by hand, each one is a stop sign:
   redistribution. `qwen-community` style licenses: read before publishing.
 - **calibration build**: is there `builds/<name>/` in `AtomicChat/calib-corpora`
   for this tokenizer? A new tokenizer needs `make_recipe` + `build_corpus` from
-  foundry.sh first (about an hour, a person reads the shares).
+  foundry.sh first (about an hour, a person reads the shares). An MoE takes the
+  MoE shares: `builds/qwen3.8-flash-next-moe`, not the August
+  `builds/qwen3.8-flash-next`, which is the dense 27B build under another name
+  (`flash-next-imatrix.md`).
 - **profile**: dense hybrid -> `dense-hybrid`; MoE with the PLE table and
   hyper-connections (`qwen4exp`) -> `moe-qwen4exp`; another MoE -> `moe-hybrid`,
   expect the generator to list tensor groups it does not know (next step). A small model
