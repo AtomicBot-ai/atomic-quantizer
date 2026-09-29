@@ -57,6 +57,7 @@ else
 fi
 say "uploading the reference ($(( SIZE / 1000000 )) MB)"
 hf_up_dir "$WORK/kld/up" kld "$METRICS" dataset
+rm -rf "$WORK/kld/up"   # the parts are a second copy of the reference (88 GB on a 27B); node_quant uses $BASE
 
 PPL=$(grep -oP 'Final estimate: PPL = \K[0-9.]+' "$LOGS/base-$EVALSET.log" | head -1 || true)
 done_node "\"base_bytes\": $SIZE, \"ppl\": \"${PPL:-?}\", \"selfcheck_kld\": \"${SELF:-skipped}\""

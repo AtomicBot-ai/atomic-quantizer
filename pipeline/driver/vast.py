@@ -12,11 +12,23 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 PROBE_URL = "https://huggingface.co/Qwen/Qwen2.5-7B/resolve/main/model-00001-of-00004.safetensors"
 IMAGE = "nvidia/cuda:13.0.2-devel-ubuntu24.04"
 _alive = set()
+_claimed = set()            # offers some rent() in this process already tried: several boxes are rented side by side
+_claim_lock = threading.Lock()
+
+
+def say(msg):
+    """print that never raises: with the laptop's disk full, a failed write of the driver's log
+    killed the driver before it destroyed its boxes (rehearsal 2026-09-29, three boxes left billing)"""
+    try:
+        print(msg, flush=True)
+    except OSError:
+        pass
 
 
 def _vast(*args, raw=True, check=True):
@@ -27,8 +39,15 @@ def _vast(*args, raw=True, check=True):
     return json.loads(r.stdout) if raw and r.stdout.strip() else r.stdout
 
 
+# $/GB of traffic. A box pulls the BF16 and the KLD reference (~145 GB on a 27B) before its first rung;
+# on the rehearsal (2026-09-29) two hosts at $0.020 and $0.039/GB billed more for that than for the GPU.
+MAX_GB_COST = 0.01
+
+
 def search(query, disk_gb, limit=20):
     q = f"{query} disk_space>={disk_gb} inet_down>=1000 reliability>0.98 rentable=true"
+    if "inet_down_cost" not in query:
+        q += f" inet_down_cost<={MAX_GB_COST} inet_up_cost<={MAX_GB_COST}"
     offers = _vast("search", "offers", q, "-o", "dph", "--limit", str(limit))
     return offers or []
 
@@ -37,12 +56,15 @@ def destroy(iid, quiet=False):
     r = subprocess.run(["vastai", "destroy", "instance", str(iid), "-y"], capture_output=True, text=True)
     _alive.discard(iid)
     if not quiet:
-        print(f"[vast] destroy {iid}: {'ok' if r.returncode == 0 else r.stderr.strip()}", flush=True)
+        say(f"[vast] destroy {iid}: {'ok' if r.returncode == 0 else r.stderr.strip()}")
 
 
 def _cleanup(*_):
     for iid in list(_alive):
-        destroy(iid)
+        try:
+            destroy(iid)
+        except Exception:   # one box that will not go must not keep the others billing
+            pass
     if _:
         sys.exit(130)
 
@@ -76,20 +98,28 @@ def rent(query, disk_gb, label, key, race=3, min_mbps=100, window_s=3600, image=
                "DEBIAN_FRONTEND=noninteractive apt-get install -yq openssh-server curl; }; "
                f"mkdir -p /run/sshd /root/.ssh; echo '{pub}' >> /root/.ssh/authorized_keys; "
                "chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; /usr/sbin/sshd")
+    with _claim_lock:
+        mine = [o for o in offers if o["id"] not in _claimed][:race]
+        _claimed.update(o["id"] for o in mine)
+    if not mine:
+        raise RuntimeError(f"every offer for {query} is already being raced by another rental")
     racers = {}
-    for o in offers[:race]:
+    for o in mine:
         try:
             r = _vast("create", "instance", str(o["id"]), "--image", image, "--disk", str(disk_gb), "--ssh", "--direct",
                       "--onstart-cmd", onstart, "--label", label, "--cancel-unavail")
         except RuntimeError as e:
-            print(f"[vast] offer {o['id']}: {e}", flush=True)
+            say(f"[vast] offer {o['id']}: {e}")
+            continue
+        if not isinstance(r, dict):   # vastai prints some refusals as a bare JSON string
+            say(f"[vast] offer {o['id']}: {str(r)[:200]}")
             continue
         iid = r.get("new_contract")
         if iid:
             racers[iid] = o
             _alive.add(iid)
-            print(f"[vast] racing {iid}: {o.get('num_gpus')}x {o.get('gpu_name')}, {o.get('cpu_cores_effective')} cores, "
-                  f"{o.get('cpu_ram', 0) / 1000:.0f} GB RAM, ${o.get('dph_total', o.get('dph', 0)):.2f}/h", flush=True)
+            say(f"[vast] racing {iid}: {o.get('num_gpus')}x {o.get('gpu_name')}, {o.get('cpu_cores_effective')} cores, "
+                  f"{o.get('cpu_ram', 0) / 1000:.0f} GB RAM, ${o.get('dph_total', o.get('dph', 0)):.2f}/h")
     if not racers:
         raise RuntimeError("no instance could be created")
 
@@ -118,12 +148,12 @@ def rent(query, disk_gb, label, key, race=3, min_mbps=100, window_s=3600, image=
                     if other != iid:
                         destroy(other)
                 o = racers[iid]
-                print(f"[vast] winner {iid} at {host}:{port}, {speed // 1_000_000} MB/s", flush=True)
+                say(f"[vast] winner {iid} at {host}:{port}, {speed // 1_000_000} MB/s")
                 return {"iid": iid, "host": host, "port": int(port), "offer": o,
                         "dph": o.get("dph_total", o.get("dph")), "gpu": f"{o.get('num_gpus')}x {o.get('gpu_name')}",
                         "t_rented": time.time()}
             tries[iid] = tries.get(iid, 0) + 1
-            print(f"[vast] {iid}: probe {tries[iid]} at {speed // 1_000_000} MB/s", flush=True)
+            say(f"[vast] {iid}: probe {tries[iid]} at {speed // 1_000_000} MB/s")
             if tries[iid] >= 20:
                 destroy(iid)
                 racers.pop(iid)

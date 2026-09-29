@@ -1,9 +1,9 @@
 # Release day: a new Qwen
 
-Order of work and the points where a person decides. Durations are for a 27B
-dense model on one 4x RTX 5090 box, scaled from the Qwen3.5-2B smoke run
-(`rehearsal-qwen3.8-27b.md`, "Measured"); replace them with the 27B rehearsal's
-`run.jsonl` numbers once it has run.
+Order of work and the points where a person decides. Durations and money for
+a 27B dense model are measured: the Qwen3.8-27B rehearsal of 2026-09-29
+(`rehearsal-qwen3.8-27b.md`, "Measured: the 27B"), vast.ai, one 4x RTX 5090 box
+for convert, base and imatrix, then `--quant-boxes 4` of 2x RTX 5090.
 
 The machine that runs `release.py` must stay awake until it prints the
 release of the box: a sleeping laptop pauses the driver, not the box, and the
@@ -34,17 +34,38 @@ Check by hand, each one is a stop sign:
   `dense-hybrid`: its head gets the output types (`tied_embeddings`), and on
   Qwen3.5-4B that ladder beat the hand masks of `qwen35-masks` by a third.
 
-## 1. GGUF (5-7 h)
+## 1. GGUF (~3 h, ~$10-11)
 
 ```bash
 caffeinate -i python driver/release.py gguf --model Qwen/Qwen4-XXB --recipe <build> --profile <profile> \
-    --llama-commit <sha>
+    --llama-commit <sha> --quant-boxes 4
 ```
 
-Where the hours go, scaled from the 2B: convert ~30 min (half of it the CUDA
-build of llama.cpp), base reference ~10 min, imatrix ~2 h (two shards on four
-cards; it is bound by copying activations to the host, not by the GPU), ladder
-seconds, 16 rungs at 3-5 min each on 128 cores plus uploads.
+Where the hours go, measured on the 27B (box side, from the nodes' own
+`seconds`; the driver's minutes include any time this machine slept):
+
+| stage | where | time | money |
+|---|---|---|---|
+| rent + probe | 4x RTX 5090, $2.38/h | 2 min | |
+| node_convert | same box | 9.0 min (llama.cpp CUDA build included) | |
+| node_base | same box | 5.4 min (88.4 GB reference, self-check 0) | |
+| node_imatrix | same box, 2 shards on 2 GPU pairs | 98.8 min (9701 chunks of 512) | |
+| gguf box total | | 1.93 h | $4.93 (GPU 4.59, disk 0.18, traffic 0.16) |
+| quant, first rung on a fresh box | 2x RTX 5090, $1.18-1.31/h | 13-18 min: llama.cpp build, BF16 + reference download (~145 GB), one rung | |
+| quant, each further rung | same | 4-5 min (K rungs), 9-16 min (IQ rungs): quantize 49-181 s K, 241-799 s IQ; KLD ~2.5 min | |
+| quant stage, 16 rungs on 4 boxes | | ~50 min wall | ~$4.5 GPU + $0.2-0.6 traffic per box |
+
+A run with nothing going wrong: ~2 h 50 min and ~$10-11. The rehearsal itself
+cost $20.83 (vast charges for 36 instances, racers included) because of four
+things now fixed or written down: a full box disk on the first rung (the nodes
+now delete their upload copies), this laptop's own disk filling up (the driver
+now survives it), two hosts billing $0.020 and $0.039 per GB of traffic, which
+for one box was $2.90 of download against $1.13 of GPU (`vast.search` now asks
+for `inet_down_cost<=0.01`), and the laptop sleeping twice with the lid closed
+while four boxes waited (~$2.5; `caffeinate -i` does not cover a closed lid).
+
+The imatrix is now two thirds of the wall time; it runs two shards on one box.
+Spreading shards over boxes (`--im-boxes`, in progress) is the next saving.
 
 Runs convert, base reference, imatrix, then stops at the **ladder review**: it
 prints every rung with its predicted size and asks before quantizing. If the

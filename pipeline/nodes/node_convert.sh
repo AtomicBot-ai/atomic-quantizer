@@ -77,6 +77,9 @@ fi
 say "uploading BF16 ($(( SIZE / 1000000000 )) GB)"
 hf_up_dir "$WORK/gguf/bf16" bf16 "$METRICS" dataset
 hf_up "$WORK/inventory.json" inventory.json "$METRICS" dataset
+# the upload shards and the source are copies of what is now on the hub; on a 27B they are 107 GB,
+# and with the KLD reference they filled the 328 GB disk before the first rung (rehearsal, 2026-09-29)
+rm -rf "$WORK/gguf/bf16" "$SRC"
 for f in convert.log check-blocks.txt source.txt llama-commit.txt llama-version.txt env-$NODE.txt; do push_log "$LOGS/$f"; done
 
 done_node "\"model_sha\": \"$MODEL_SHA\", \"bf16_bytes\": $SIZE, \"mmproj\": $MMPROJ"
