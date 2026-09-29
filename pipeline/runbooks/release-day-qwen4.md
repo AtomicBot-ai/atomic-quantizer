@@ -28,11 +28,53 @@ Check by hand, each one is a stop sign:
 - **calibration build**: is there `builds/<name>/` in `AtomicChat/calib-corpora`
   for this tokenizer? A new tokenizer needs `make_recipe` + `build_corpus` from
   foundry.sh first (about an hour, a person reads the shares).
-- **profile**: dense hybrid -> `dense-hybrid`; MoE -> `moe-hybrid`, expect the
-  generator to list tensor groups it does not know (next step). A small model
+- **profile**: dense hybrid -> `dense-hybrid`; MoE with the PLE table and
+  hyper-connections (`qwen4exp`) -> `moe-qwen4exp`; another MoE -> `moe-hybrid`,
+  expect the generator to list tensor groups it does not know (next step). A small model
   with tied embeddings (no `output.weight` in the inventory) still takes
   `dense-hybrid`: its head gets the output types (`tied_embeddings`), and on
   Qwen3.5-4B that ladder beat the hand masks of `qwen35-masks` by a third.
+
+The same questions answered by tools, on the laptop, in about ten minutes (the
+dry run reads only safetensors headers; a llama.cpp checkout at the commit you
+will pin must know the class):
+
+```bash
+python lib/probe_arch.py Qwen/Qwen4-XXB Qwen/Qwen3.8-27B Qwen/Qwen3.8-Flash-Next \
+    --llama-cpp ~/llama.cpp --work /tmp/probe --md /tmp/probe/table.md
+python lib/tok_fingerprint.py Qwen/Qwen4-XXB --against fingerprints/qwen3.8-27b.json
+python lib/corpus_check.py template Qwen/Qwen4-XXB
+python lib/ladder_gen.py --inventory /tmp/probe/Qwen--Qwen4-XXB.inventory.json \
+    --profile profiles/moe-qwen4exp.yaml      # or dense-hybrid
+```
+
+- `probe_arch`: rows that are not a multiple of 256 and their share, the MTP
+  block (kept or dropped by the converter), the GET_ROWS share (the PLE table
+  was 28.9% of Flash-Next and no imatrix reaches it).
+- `tok_fingerprint`: SAME TOKENIZER AND TEMPLATE -> take the Qwen3.8 build as it
+  is. The 3.5 -> 3.8 step appended 7 audio tokens to an identical BPE
+  vocabulary: that reads as a new tokenizer, but the sweep only needs those ids
+  added. A new template -> re-render (`build.py` with the new model dir).
+- `corpus_check template`: FAIL stops the build. Read the notes: whether earlier
+  reasoning is kept, the thinking-off tail, the reasoning efforts the template
+  accepts (Qwen3.8 refuses `high`), the vision markers.
+- `ladder_gen`: no refusal. A refusal names the tensor and the reason; add a
+  role or change a type in the profile.
+
+After the imatrix (MoE: before any rung):
+
+```bash
+python lib/im_report.py all imatrix.gguf --vs imatrix-half.gguf --inventory inventory.json \
+    -o imatrix.stats.txt --json im-report.json      # exit 3: dead expert or not converged
+python lib/band_select.py imatrix.stats.txt --inventory inventory.json --profile profiles/moe-qwen4exp.yaml -o bands.json
+python lib/corpus_check.py specials calib_train.txt --tokenizer Qwen/Qwen4-XXB
+```
+
+A dead expert (count 0) at 1-3 bits is noise: add the domain that routes to it
+to the pool and recompute one shard, not the whole corpus. On the August
+Flash-Next imatrix, 4000 chunks left 7 experts dead (blk.0 and blk.47) and
+`ffn_down_exps` had not converged (per-expert cos 0.93 between 1200 and 4000
+chunks; every other role above 0.994).
 
 ## 1. GGUF (5-7 h)
 
@@ -99,3 +141,29 @@ without the checkpoint being wrong.
   the vision demo. Edit the README on the hub; `release.py card --card-overwrite`
   regenerates it from scratch.
 - Flip the repos to public.
+
+## The Qwen line on 2026-09-29 (what a new row is compared with)
+
+`probe_arch.py` over the proxies, llama.cpp `957538960`; hashes are sha256 of the
+files (first 12). "rows not /256" are the quantisable row lengths that k and i
+types cannot take, with their share of the parameters.
+
+| model | arch | blocks (full attn) | MTP | experts | rows not /256 (share) | vocab / tokenizer | tokenizer.json | chat_template | vision | GET_ROWS: embd + PLE | BF16 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Qwen3.5-0.8B | qwen35 | 24 (6) | 1 (in GGUF) | dense | none | 248320 / 248070 | 5f9e4d4901a9 | 273d8e0e683b | yes | 32.90% + 0.0% (tied) | 1.5 GB |
+| Qwen3.5-2B | qwen35 | 24 (6) | 1 (in GGUF) | dense | none | 248320 / 248070 | 5f9e4d4901a9 | 273d8e0e683b | yes | 26.18% + 0.0% (tied) | 3.9 GB |
+| Qwen3.5-4B | qwen35 | 32 (8) | 1 (in GGUF) | dense | none | 248320 / 248070 | 5f9e4d4901a9 | a4aee8afcf2e | yes | 14.69% + 0.0% (tied) | 8.7 GB |
+| Qwen3.8-27B | qwen35 | 64 (16) | 1 (in GGUF) | dense | none | 248320 / 248077 | 0997f410c57a | c3cf9e34abf4 | yes | 4.65% + 0.0% | 54.6 GB |
+| Qwen3.8-Flash-Next | qwen4exp | 48 (12) | 1 (dropped) | 512/10 | 160 (28.9%: per_layer_token_embd), 640 (22.8%: ffn_down_exps/ffn_down_shexp), 320 (0.2%: hc_attn_up/hc_ffn_up/output_hc_up), 4 (0.0%: ple_conv1d) | 248320 / 248077 | 0997f410c57a | c3cf9e34abf4 | yes | 0.36% + 28.9% | 354.0 GB |
+
+- Tokenizer: one BPE vocabulary through the whole line (vocab.json and merges.txt
+  identical); 3.8 appends 7 audio/tts tokens (ids 248070-248076) to 3.5's 26
+  added tokens. Qwen3.8-27B and Flash-Next share tokenizer.json and the template
+  byte for byte, which is why `builds/qwen3.8-27b` and `builds/qwen3.8-flash-next`
+  are the same file.
+- Template: 3.5-0.8B/2B think only when asked, 3.5-4B thinks by default, 3.8 adds
+  `reasoning_effort` (low, medium, xhigh; xhigh by default, written into the
+  system block) and keeps the reasoning of earlier turns (`preserve_thinking`).
+- Flash-Next: the converter drops the MTP block (`no_mtp`), the n-gram table is
+  28.9% of the parameters in rows of 160, and the pinned `1692f9e50bb2` predates
+  `qwen4exp` (added in `6c84c7d5d`, 2026-08-27; hc ops and sparse FA later).

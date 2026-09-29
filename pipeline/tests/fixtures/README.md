@@ -32,3 +32,19 @@ imatrix. Timings and cost are in `runbooks/rehearsal-qwen3.8-27b.md`.
 | `quantize-Q8_0.log` | the Q8_0 rung, the source of the tensor inventory | `3a6fadfd6334dcfb` |
 | `ladder.json` | the ladder as the box built it, before `tied_embeddings` | `aee6cb2a0fbfdcfe` |
 | `results.json` | all 16 rungs as measured | `090bd5861faf6bc8` |
+
+## qwen3.8-flash-next
+
+The MoE proxy of Qwen 4 (`qwen4exp`), 2026-09-29. Nothing was downloaded: the
+inventory comes from the converter reading safetensors headers over HTTP.
+
+| file | what | sha256 (first 16) |
+|---|---|---|
+| `inventory.json` | `gguf_inventory.py --from-convert-log` of `convert_hf_to_gguf.py --remote Qwen/Qwen3.8-Flash-Next --dry-run --outtype bf16`, model revision `de4b8e4d43b9`, llama.cpp `957538960` (upstream master of 2026-09-23). 1224 tensors, 354.0 GB | `c6f96b632def46fa` |
+| `release-AD-3.84bpw.types.json` | the type of every tensor in `AtomicChat/Qwen3.8-Flash-Next-GGUF` `Qwen3.8-Flash-Next-AD-3.84bpw-IQ4_XS-M64/` at revision `142262902a`, read from the headers of its 28 shards, plus four header keys | `d199d15d74f910df` |
+
+The same dry run on Qwen3.8-27B gave the 866 tensors of the August 27B release
+with identical names, types and shapes, which is what makes the Flash-Next
+inventory trustworthy without the 354 GB file. The release file is the tech
+brief's "before" build (table q5_1, gate/up iq1_m, band iq2_s, ffn_down mxfp4,
+84.9 GB); `test_qwen4exp.py` replays it tensor for tensor.

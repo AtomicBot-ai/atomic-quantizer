@@ -1,0 +1,30 @@
+{
+  "repo": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "tokenizer_sha256": "8f6ca429cdba92d4833991bd01a29139dfccf36cba7effd7308f7da4205ad022",
+  "vocab_sha256": "c39c2e23ff5b2c34598e82921096f697da6593888669ccdf03840df9175558bc",
+  "added_tokens_sha256": "57254b0251c015dba8e72d3b52d253471b7523c8c50a7d88d6c7e5d15d0e0700",
+  "template_sha256": "924d3fcc64873b375d5909e8a664ba0aca97c9d6381f5ebda004d1b8a2fb4d64",
+  "tokens": {
+    "vocab_size": 248320,
+    "vocab_entries": 248044,
+    "added": 33,
+    "bos": null,
+    "eos": "<|im_end|>",
+    "pad": "<|endoftext|>",
+    "eos_token_id": [
+      248046,
+      248044
+    ],
+    "add_bos_token": false
+  },
+  "files": {
+    "chat_template.jinja": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+    "config.json": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab",
+    "generation_config.json": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e",
+    "merges.txt": "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d",
+    "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+    "tokenizer_config.json": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27",
+    "vocab.json": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
+  }
+}
