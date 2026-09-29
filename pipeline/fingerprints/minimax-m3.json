@@ -1,0 +1,29 @@
+{
+  "repo": "MiniMaxAI/MiniMax-M3",
+  "revision": "f0e1c1e04d40177e4673a22097036854f536e9c0",
+  "tokenizer_sha256": "59d9421306e8c9826c358671025eee33d31e2785b4e13969fb5a7f8d4acc98cd",
+  "vocab_sha256": "185c4d53b1842fc40c8b5eb7cda18dd5f2d60c3bb7bed9fb01785cb312311714",
+  "added_tokens_sha256": "0b3c810badaccb588e51b8be4d1f059dcbb3b30bcc7bc7ebb224a5d89f473a36",
+  "template_sha256": "5e7ffe773c7af04d406e4dd16adf8d1894082f53a4abde9e02d3adf07affe182",
+  "tokens": {
+    "vocab_size": 200064,
+    "vocab_entries": 200000,
+    "added": 61,
+    "bos": "]~b]",
+    "eos": "[e~[",
+    "pad": "]!p~[",
+    "eos_token_id": 200020,
+    "add_bos_token": null
+  },
+  "files": {
+    "added_tokens.json": "63f277741fb061e615cb604286a845d971178ba4716732a59cf42b3752c0ce4e",
+    "chat_template.jinja": "11421244f67553498e5c8112dae02802025bcc4305ec45ad380af95c96f9fe64",
+    "config.json": "c9c97ce1e4eece60012d5a10ea87717458bfb1f19c2c7a615a3dbff83d090c6b",
+    "generation_config.json": "272d19efac5060ff8c9f76c7ed67909a5da1be466284ee4f1f1bd2a810c6fad2",
+    "merges.txt": "ca47ea60cf5bd48832586adc264f439d0ea4254176b24a95f85eaa9750e2b5f9",
+    "special_tokens_map.json": "401b624ec44507183d1dc65c74f7f3387699a77971aa19fa5a0cc57a3989ba97",
+    "tokenizer.json": "bb1f1626cf01448f1e3b6036d0a061ffc66c91d9046aada14ea23a5441b5ad6e",
+    "tokenizer_config.json": "15caca9f74fbce9b86dc014e9324cbefa56703d81ccd6d56020faa1c41d2eae5",
+    "vocab.json": "b44c066b5dc34c800c4e3ecbd85f3e95ce3bfdbf8a5fe30223e005175103578a"
+  }
+}

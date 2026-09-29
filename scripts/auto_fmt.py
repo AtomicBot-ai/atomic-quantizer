@@ -133,14 +133,16 @@ def render(messages: Sequence[dict],
            add_bos: bool = False) -> str:
     tok = _tokenizer()
 
-    # Templates that have no thinking channel simply never read this variable,
-    # so passing it unconditionally is safe and keeps one code path.
+    # Templates that have no thinking channel simply never read these variables,
+    # so passing them unconditionally is safe and keeps one code path. Qwen reads
+    # enable_thinking, MiniMax-M3 reads thinking_mode and ignores the other.
     enable_thinking = str(reasoning_strength or DEFAULT_REASONING).lower() not in _NO_THINK
 
     text = tok.apply_chat_template(
         _clean(messages),
         tools=list(tools) if tools else None,
         enable_thinking=enable_thinking,
+        thinking_mode="enabled" if enable_thinking else "disabled",
         add_generation_prompt=add_generation_prompt,
         tokenize=False,
     )

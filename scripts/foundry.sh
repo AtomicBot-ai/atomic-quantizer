@@ -1814,7 +1814,8 @@ def convo(args_as_dict, tool_role="tool"):
         {"role": "assistant", "content": "", "tool_calls": [
             {"type": "function", "function": {"name": "get_weather", "arguments": args}}]},
         {"role": tool_role, "content": '{"temp_c": 19}', "name": "get_weather"},
-        {"role": "assistant", "content": "It is 19 degrees in Paris."},
+        {"role": "assistant", "content": "It is 19 degrees in Paris.",
+         "reasoning_content": "The tool says 19, so answer with that."},
     ]
 
 tools = [{"type": "function", "function": {
@@ -1824,12 +1825,28 @@ tools = [{"type": "function", "function": {
                    "required": ["city"]}}}]
 tools_bare = [t["function"] for t in tools]
 
-from jinja2 import Environment
-from jinja2.exceptions import TemplateError
-env = Environment(trim_blocks=True, lstrip_blocks=True)
-env.policies["json.dumps_kwargs"] = {"ensure_ascii": False}
+# Render the way transformers does, since that is what auto_fmt and inference
+# use. Its tojson takes ensure_ascii/indent keywords that plain jinja's does not
+# (MiniMax-M3 calls tojson(ensure_ascii=False)), and it adds raise_exception.
 try:
-    tpl = env.from_string(template)
+    from transformers.utils.chat_template_utils import _compile_jinja_template
+    compile_ = _compile_jinja_template
+except Exception:
+    from jinja2 import Environment
+    from jinja2.ext import loopcontrols
+    def compile_(src):
+        env = Environment(trim_blocks=True, lstrip_blocks=True, extensions=[loopcontrols])
+        def tojson(x, ensure_ascii=False, indent=None, separators=None, sort_keys=False):
+            return json.dumps(x, ensure_ascii=ensure_ascii, indent=indent,
+                              separators=separators, sort_keys=sort_keys)
+        def raise_exception(msg):
+            raise ValueError(msg)
+        env.filters["tojson"] = tojson
+        env.globals["raise_exception"] = raise_exception
+        return env.from_string(src)
+    print("warn  transformers is not installed, rendering with a stand-in environment")
+try:
+    tpl = compile_(template)
 except Exception as e:
     print("FAIL  the template does not even parse as jinja: %s" % e)
     sys.exit(1)
@@ -1873,10 +1890,11 @@ if "get_weather" not in rendered:
     print("         have no statistics for the tool token set at all.")
     print("         Check how the pool stores tool_calls before building.")
 
-# which markers does it emit, and are they real tokens
-markers = sorted(set(re.findall(r"<\|[^|>]{1,40}\|>|<[a-z_]{2,20}>|\[/?[A-Z_]{2,20}\]", rendered)))
-if not markers:
-    print("warn  the template emits no special markers at all, unusual")
+# The switch that turns the thinking channel on. auto_fmt must set the one this
+# template reads, or every document renders in the template's default mode.
+knobs = [k for k in ("enable_thinking", "thinking_mode", "reasoning_effort", "thinking")
+         if re.search(r"\b%s\b\s*(is\s+defined|==|!=|\)|%%\}|-%%\})" % k, template)]
+print("thinking switch: %s" % (", ".join(knobs) or "none found, the template has no thinking toggle"))
 
 
 known = set()
@@ -1897,11 +1915,22 @@ if add_raw:
     except Exception:
         pass
 
+# Special tokens are found by looking for every added token of this tokenizer
+# in the render, longest first, so any markup family is caught (<|im_start|>,
+# MiniMax's ]~b] and ]<]minimax[>[, ...). What the delimiter pattern finds
+# beyond that is plain text the model reads as ordinary characters.
+special, rest = [], rendered
+for t in sorted(known, key=len, reverse=True):
+    if len(t) > 1 and t in rest:
+        special.append(t)
+        rest = rest.replace(t, "\x00")
+plain = sorted(set(re.findall(r"<\|[^|>]{1,40}\|>|</?[a-z_:]{2,20}>|\[/?[A-Z_]{2,20}\]", rest)))
+special.sort()
+if not special and not plain:
+    print("warn  the template emits no special markers at all, unusual")
+
 print()
 print("markers the template emits:")
-special, plain = [], []
-for m in markers:
-    (special if m in known else plain).append(m)
 
 for m in special:
     print("  special token   %s" % m)
@@ -2130,12 +2159,12 @@ make_recipe() {
         return 1
     fi
     pip install --break-system-packages -q -U jinja2 pyyaml > /dev/null 2>&1
-    mkdir -p /recipes
-    python3 - "$1" "$2" << 'RECIPEEOF'
+    mkdir -p $FROOT/recipes
+    python3 - "$1" "$2" "$FROOT/recipes" << 'RECIPEEOF'
 import json, os, re, sys
 from huggingface_hub import hf_hub_download
 
-name, repo = sys.argv[1], sys.argv[2]
+name, repo, outdir = sys.argv[1], sys.argv[2], sys.argv[3]
 
 # build.py resolves chat.format through FORMATTERS. auto_fmt drives the model's
 # own template through transformers, so one renderer covers every model and no
@@ -2172,12 +2201,15 @@ window  = pick("sliding_window", default=None)
 hidden  = pick("hidden_size", default=0)
 inter   = pick("intermediate_size", default=0)
 moe     = pick("moe_intermediate_size", default=None)
+dense   = pick("dense_intermediate_size", default=None)
+shared  = pick("shared_intermediate_size", "shared_expert_intermediate_size", default=None)
 experts = pick("num_experts", "n_routed_experts", "num_local_experts", default=None)
 
 print("read from %s:" % repo)
 for k, v in (("vocab_size", vocab), ("layers", layers), ("context", ctxlen),
              ("sliding_window", window), ("hidden_size", hidden),
              ("intermediate_size", inter), ("moe_intermediate_size", moe),
+             ("dense_intermediate_size", dense), ("shared_intermediate_size", shared),
              ("experts", experts)):
     print("  %-22s %s" % (k, v))
 
@@ -2186,7 +2218,8 @@ print("superblock check, rows must divide by 256 or every k/i quant below")
 print("4.5 bpw silently falls back to a block-32 type:")
 shape_lines = []
 for k, v in (("hidden_size", hidden), ("intermediate_size", inter),
-             ("moe_intermediate_size", moe)):
+             ("moe_intermediate_size", moe), ("dense_intermediate_size", dense),
+             ("shared_intermediate_size", shared)):
     if not v:
         continue
     rem = v % 256
@@ -2205,7 +2238,8 @@ if isinstance(template, list):
 
 add_bos = bool(tok_cfg.get("add_bos_token", False))
 uses_date = bool(template and "strftime_now" in template)
-thinking = bool(template and re.search(r"enable_thinking|<think>", template))
+# <think>, <mm:think> (MiniMax), or a switch the template reads
+thinking = bool(template and re.search(r"enable_thinking|thinking_mode|think>", template))
 
 print()
 if template:
@@ -2220,9 +2254,17 @@ print("  mentions thinking   : %s" % thinking)
 known_renders = ["dsv4", "nemotron", "muse-glimmer"]
 excl = [r for r in known_renders if r not in name]
 
-reasoning_share = 15 if thinking else 10
-code_share = 18 if thinking else 23
-longctx_share = 12 if window is None else 10
+# The team's split, dense and MoE. A MoE build leans on multilingual and the
+# vocab sweep: rare tokens are what reach the rarely routed experts. Without a
+# thinking channel five points move from reasoning to code.
+is_moe = bool(experts)
+sh = dict(zip(("agentic", "code", "reasoning", "multilingual", "longctx",
+               "vocab_sweep", "structured", "graphics"),
+              (22, 16, 12, 18, 10, 12, 6, 4) if is_moe else (24, 18, 15, 14, 11, 10, 5, 3)))
+if not thinking:
+    sh["reasoning"] -= 5
+    sh["code"] += 5
+assert sum(sh.values()) == 100, sh
 
 body = """# Calibration recipe for {repo}.
 # Generated by foundry make_recipe. Everything under model: was read from the
@@ -2233,17 +2275,18 @@ body = """# Calibration recipe for {repo}.
 {shapes}
 #
 # Shares:
-#   agentic 25      tool markup is a dense token set natural text never emits,
+#   ({kind} split)
+#   agentic {agentic}      tool markup is a dense token set natural text never emits,
 #                   so without real weight the imatrix has no statistics for it
 #   code {code}         the agentic evals in this class are code shaped
 #   reasoning {reason}    {reason_why}
-#   multilingual 14 non-Latin embedding rows are only exercised by real
+#   multilingual {multi} non-Latin embedding rows are only exercised by real
 #                   multilingual text
 #   longctx {lctx}      {lctx_why}
-#   vocab_sweep 10  regenerated against THIS tokenizer, {vocab} rows. A sweep
+#   vocab_sweep {vsweep}  regenerated against THIS tokenizer, {vocab} rows. A sweep
 #                   built for another model is meaningless here
-#   structured 5    JSON, YAML, TOML, SQL, as files and inside assistant turns
-#   graphics 3      kept small for continuity with the other builds
+#   structured {struct}    JSON, YAML, TOML, SQL, as files and inside assistant turns
+#   graphics {gfx}      kept small for continuity with the other builds
 
 name: {name}
 
@@ -2272,14 +2315,14 @@ calib_train:
     default: 0.05
     longctx: 0.12
   shares:
-    agentic: 25
+    agentic: {agentic}
     code: {code}
     reasoning: {reason}
-    multilingual: 14
+    multilingual: {multi}
     longctx: {lctx}
-    vocab_sweep: 10
-    structured: 5
-    graphics: 3
+    vocab_sweep: {vsweep}
+    structured: {struct}
+    graphics: {gfx}
 
 calib_longctx:
   target_tokens: 750000
@@ -2303,7 +2346,9 @@ notes:
     repo=repo, name=name, fmt=fmt_key, vocab=vocab, layers=layers, ctxlen=ctxlen,
     window="null" if window is None else window,
     add_bos="true" if add_bos else "false",
-    code=code_share, reason=reasoning_share, lctx=longctx_share,
+    kind="MoE" if is_moe else "dense", agentic=sh["agentic"], code=sh["code"],
+    reason=sh["reasoning"], multi=sh["multilingual"], lctx=sh["longctx"],
+    vsweep=sh["vocab_sweep"], struct=sh["structured"], gfx=sh["graphics"],
     reason_why=("the thinking channel is on the default inference path here"
                 if thinking else "no thinking channel found in the template"),
     lctx_why=("no sliding window, so long range behaviour is only exercised by "
@@ -2316,7 +2361,7 @@ notes:
               '  pin_date: "2026-08-14"\n' if uses_date else ""),
 )
 
-out = "/recipes/%s.yaml" % name
+out = os.path.join(outdir, "%s.yaml" % name)
 open(out, "w").write(body)
 print()
 if vocab:
@@ -2353,9 +2398,9 @@ new_model() {
     make_recipe $1 $2 || return 1
     echo
     echo "=============== 3. next ==============="
-    echo "  cat /recipes/$1.yaml"
+    echo "  cat $FROOT/recipes/$1.yaml"
     echo "  get_tools                     # clone calib-corpora"
-    echo "  cp /recipes/$1.yaml /calib-corpora/recipes/"
+    echo "  cp $FROOT/recipes/$1.yaml /calib-corpora/recipes/"
     echo "  then build the corpus with the pipeline in /calib-corpora/tools"
 }
 
@@ -6292,8 +6337,9 @@ probe_arch() {
         echo "  probe_arch Qwen/Qwen3.8-Flash-Next"
         return 1
     fi
-    local repo="$1" dir=/probe
-    mkdir -p $dir /logs
+    # this runs on a laptop before anything is rented, so it follows FROOT
+    local repo="$1" dir=$FROOT/probe
+    mkdir -p $dir $LOG_DIR
 
     echo "=============== 1. small files only, no weights ==============="
     hf download "$repo" --local-dir $dir \
@@ -6305,7 +6351,7 @@ probe_arch() {
 
     echo
     echo "=============== 2. what this model says it is ==============="
-    python3 - "$repo" "$dir" 2>&1 | tee /logs/probe-$(basename $repo).log << 'PROBEEOF'
+    python3 - "$repo" "$dir" << 'PROBEEOF' 2>&1 | tee $LOG_DIR/probe-$(basename $repo).log
 import json, os, sys, collections
 
 repo, d = sys.argv[1], sys.argv[2]
@@ -6334,15 +6380,21 @@ else:
 
 print()
 print("--- shape of the network ---")
-for k in ("num_hidden_layers", "hidden_size", "intermediate_size",
-          "moe_intermediate_size", "num_experts", "num_experts_per_tok",
+# MiniMax names the expert width intermediate_size and the dense one
+# dense_intermediate_size, DeepSeek uses n_routed_experts: list every spelling
+ROWS = ("hidden_size", "intermediate_size", "moe_intermediate_size",
+        "dense_intermediate_size", "shared_intermediate_size",
+        "shared_expert_intermediate_size")
+for k in ("num_hidden_layers",) + ROWS + (
+          "num_experts", "num_local_experts", "n_routed_experts",
+          "num_experts_per_tok", "n_shared_experts", "first_k_dense_replace",
           "num_attention_heads", "num_key_value_heads", "head_dim",
           "vocab_size", "max_position_embeddings", "full_attention_interval",
-          "linear_conv_kernel_dim", "num_nextn_predict_layers"):
+          "linear_conv_kernel_dim", "num_nextn_predict_layers", "num_mtp_modules"):
     v = inner.get(k, cfg.get(k))
     if v is not None:
         extra = ""
-        if k in ("hidden_size", "intermediate_size", "moe_intermediate_size"):
+        if k in ROWS and isinstance(v, int):
             extra = "   %%256 = %d %s" % (v % 256,
                      "ok" if v % 256 == 0 else "<- BREAKS k/i quants below 4.5 bpw")
         print("  %-26s %s%s" % (k, v, extra))
@@ -6377,10 +6429,10 @@ PROBEEOF
     echo
     echo "=============== 3. does OUR converter know this class ==============="
     local cls
-    cls=$(python3 -c "import json;print((json.load(open('/probe/config.json')).get('architectures') or ['?'])[0])")
-    echo "looking for $cls in /llama.cpp"
-    if [ -d /llama.cpp ]; then
-        if grep -rq "$cls" /llama.cpp/conversion/ /llama.cpp/convert_hf_to_gguf.py 2>/dev/null; then
+    cls=$(python3 -c "import json;print((json.load(open('$dir/config.json')).get('architectures') or ['?'])[0])")
+    echo "looking for $cls in $FROOT/llama.cpp"
+    if [ -d $FROOT/llama.cpp ]; then
+        if grep -rq "$cls" $FROOT/llama.cpp/conversion/ $FROOT/llama.cpp/convert_hf_to_gguf.py 2>/dev/null; then
             echo "  FOUND. convert_hf_to_gguf.py can read this model."
         else
             echo "  NOT FOUND. The converter will abort with 'Model $cls is not"
@@ -6388,18 +6440,18 @@ PROBEEOF
             echo "  the graph is written in C++."
         fi
     else
-        echo "  no /llama.cpp on this box yet, run build first"
+        echo "  no $FROOT/llama.cpp on this box yet, run build first"
     fi
 
     echo
     echo "=============== 4. tensor layout, from the shard headers ==============="
-    python3 - "$repo" << 'HDREOF'
+    python3 - "$repo" "$dir" "$LOG_DIR" << 'HDREOF'
 import json, os, re, sys, collections
 from huggingface_hub import hf_hub_url, get_hf_file_metadata
 import requests
 
-repo = sys.argv[1]
-idx = "/probe/model.safetensors.index.json"
+repo, pdir, logdir = sys.argv[1], sys.argv[2], sys.argv[3]
+idx = os.path.join(pdir, "model.safetensors.index.json")
 if os.path.exists(idx):
     shards = sorted(set(json.load(open(idx))["weight_map"].values()))
 else:
@@ -6436,7 +6488,7 @@ if not tensors:
 
 def group(name):
     n = re.sub(r"\.\d+\.", ".N.", name)
-    n = re.sub(r"^(model|language_model|transformer)\.", "", n)
+    n = re.sub(r"^((model|language_model|transformer)\.)+", "", n)
     n = re.sub(r"^layers\.N\.", "blk.", n)
     return n.rsplit(".weight", 1)[0].rsplit(".bias", 1)[0]
 
@@ -6460,12 +6512,12 @@ print()
 print("%d tensors, %.1f B parameters, %.0f GB on the wire"
       % (len(tensors), total_p / 1e9, total_b / 1e9))
 print()
-print("%-46s %5s %11s %8s %8s %s" % ("tensor group", "count", "params", "share", "GB", "dtype"))
+print("%-56s %5s %11s %8s %8s %s" % ("tensor group", "count", "params", "share", "GB", "dtype"))
 for k, e in sorted(g.items(), key=lambda kv: -kv[1]["params"]):
     if e["params"] < total_p * 0.001:
         continue
-    print("%-46s %5d %10.2fB %7.1f%% %8.1f %s"
-          % (k[:46], e["n"], e["params"] / 1e9, 100 * e["params"] / total_p,
+    print("%-56s %5d %10.2fB %7.1f%% %8.1f %s"
+          % (k[-56:], e["n"], e["params"] / 1e9, 100 * e["params"] / total_p,
              e["bytes"] / 1e9, ",".join(sorted(e["dtype"]))))
 
 emb = sum(e["params"] for k, e in g.items()
@@ -6476,12 +6528,23 @@ print("lookup-shaped parameters (embedding and n-gram tables): %.1f B, %.0f%% of
 print("Those are gather operations, not matmuls, so llama-imatrix collects no")
 print("statistics for them and they quantize blind however good the corpus is.")
 
+# A config can announce MTP that the checkpoint does not ship (MiniMax-M3 says
+# num_mtp_modules 7 and has no such tensor), and then there is no block to keep high.
+cfg = json.load(open(os.path.join(pdir, "config.json")))
+inner = cfg.get("text_config") or cfg
+claimed = inner.get("num_nextn_predict_layers") or inner.get("num_mtp_modules") or 0
+mtp = [n for n in tensors if re.search(r"(^|\.)(mtp|nextn)[._]|\.eh_proj\.|\.enorm\.|\.hnorm\.", n)]
+print()
+print("MTP: config announces %s, checkpoint has %d tensors%s"
+      % (claimed or "none", len(mtp),
+         "  <- nothing to convert, a draft head is not in these weights" if claimed and not mtp else ""))
+
 json.dump({k: {"count": v["n"], "params": v["params"], "bytes": v["bytes"],
                "dtype": sorted(v["dtype"]), "shape": v["shape"]}
            for k, v in g.items()},
-          open("/logs/tensor-layout.json", "w"), indent=2)
+          open(os.path.join(logdir, "tensor-layout.json"), "w"), indent=2)
 print()
-print("written to /logs/tensor-layout.json")
+print("written to %s" % os.path.join(logdir, "tensor-layout.json"))
 HDREOF
 
     echo
