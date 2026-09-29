@@ -37,10 +37,12 @@ hold, from the inventory: **250.3 GB** in BF16, about 133 GB in Q8_0.
 rule says and costs no more than the Q8 route on 8x 5090. The same box also
 computes the BF16 reference logits the rungs need, which Q8 cannot give.
 
-`node_imatrix` sizes shards with every tensor at 2 bytes, table included
-(`MODEL_BYTES` = 354 GB): it still accepts 4x RTX PRO 6000 at batch 8192
-(needs ~366, has ~391) and refuses what really does not fit, but it
-over-counts by the 103 GB of GET_ROWS tables.
+`node_imatrix` counts the same way (`gguf_inventory.gpu_bytes`, the host tables
+left out) plus 3 GB per GPU for buffers: one shard on 4x RTX PRO 6000 takes
+batch 8192 (needs ~271 GB, has ~391); 8x 5090 is refused (~276 against ~260).
+The driver's defaults do not fit this model: it puts a shard on every GPU pair
+(192 GB, refused) and `box_plan` asks for 8 cards of >= 140 GB for a 354 GB
+model. Pass one shard per box and the card.
 
 Host: RAM >= 512 GB (the 102 GB table stays mapped, the rest of the 354 GB file
 wants to stay in page cache), disk 1 TB (source 354 GB + BF16 GGUF 354 GB +
@@ -111,7 +113,9 @@ all of them is the N vs 2N check.
 
 ```bash
 caffeinate -i python driver/release.py gguf --model Qwen/Qwen3.8-Flash-Next --recipe qwen3.8-flash-next-moe \
-    --profile moe-qwen4exp --llama-commit 957538960 --repo-suffix -rehearsal
+    --profile moe-qwen4exp --llama-commit 957538960 --repo-suffix -rehearsal \
+    --gpu-query "gpu_name=RTX_PRO_6000_WS num_gpus=4 cpu_ram>=512 inet_down>=5000" \
+    --im-boxes 2 --im-shards 2
 ```
 
 ## Acceptance
