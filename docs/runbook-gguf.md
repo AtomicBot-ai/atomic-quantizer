@@ -252,6 +252,30 @@ results                           # parses every log into a table and results.js
 `kld_all` skips what is already measured, so it is also the catch up command
 after a box built quants before its reference existed. `KLD_FORCE=1` redoes them.
 
+Two builds a few thousandths of KLD apart may not differ at all. The ± that
+llama-perplexity prints belongs to one build and is taken over tokens, so it
+says nothing about the gap between two. `kld_diff` pairs two logs chunk by chunk
+over the same tokens and puts a bootstrap interval, over chunks, on the
+difference:
+
+```bash
+kld_diff Q5_K_S AD-Q5_K_S 38.8    # bare names read /logs/kld-$EVALSET--NAME.log
+```
+
+```
+chunks 30  base 0.007950  variant 0.007140
+dKLD -0.000810  95% CI [-0.000900, -0.000717]  rel -10.2% [-11.2, -9.2]  variant lower in 30/30 chunks
+d top-1 +0.121 pp  95% CI [+0.027, +0.220]
+per 100 MiB: -0.002088  [-0.002320, -0.001847]
+```
+
+The third argument is how many MiB the variant adds over the base; with it the
+last line says what those MiB bought. An interval that holds zero is not a
+result, however the means read. Both logs have to come from the same eval set,
+context and reference, and `kld_diff` refuses when the chunk counts or the
+reference perplexity disagree. The intervals err slightly wide, because the
+log rounds to five decimals; `kld_diff` with no arguments says by how much.
+
 Other publishers' builds get measured the same way, against our reference:
 
 ```bash

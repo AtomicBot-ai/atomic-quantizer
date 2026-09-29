@@ -189,6 +189,7 @@ use_gpus 0,1                    # hold quant runs to a setup readers can relate 
 kld_all
 bench_all
 results
+kld_diff BASE VARIANT [MIB]     # is the gap between two builds real: paired, with an interval
 
 # --- publish -------------------------------------------------------------
 audit                           # published but never measured, and vice versa
