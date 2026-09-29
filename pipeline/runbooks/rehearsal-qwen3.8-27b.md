@@ -154,6 +154,41 @@ of the same command, each resuming from the hub:
 3. the other 9 rungs; the laptop slept twice with the lid closed (~15 min each)
    while the boxes waited.
 
+### Stage B: bands from a scan against August, 2026-09-29
+
+Same imatrix (the rehearsal's), same reference, same card (2x RTX 5090), one
+box, 56 min, $2.21 with traffic. `scan.py` (roles x quarters of depth, one group
+two steps down from q8_0, 87 chunks): the ffn quarters rank tail first by a
+factor of three, then the third, the first and the second within 2 SE of each
+other.
+
+| quarter | blocks | dKLD per GB saved |
+|---|---|---|
+| Q4 | 48-63 | +0.001110 +- 0.000047 |
+| Q3 | 32-47 | +0.000393 +- 0.000038 |
+| Q1 | 0-15 | +0.000330 +- 0.000044 |
+| Q2 | 16-31 | +0.000305 +- 0.000037 |
+
+`scan.py bands` fills the edge with 48-63 and the mid with 40-47; August has
+0-3 + 52-63 and 4-11. Same counts, so every rung keeps its size to the byte.
+`kld_diff` over the 87 chunks, scan bands minus August (minus the rehearsal
+rung, same reference, in brackets):
+
+| rung | GB | August | scan | dKLD | 95% CI | z | verdict |
+|---|---|---|---|---|---|---|---|
+| AD-Q5_K_M-Q4_K_M | 18.55 | 0.007296 | 0.007163 | -1.8 % (-1.7 %) | -4.0 .. +0.1 % | -1.7 | tie |
+| AD-IQ4_XS | 16.53 | 0.012483 | 0.012398 | -0.7 % (-0.3 %) | -2.1 .. +1.0 % | -0.9 | tie |
+| AD-IQ3_S | 13.89 | 0.032471 | 0.030964 | -4.6 % (-4.7 %) | -6.6 .. -2.8 % | -4.7 | better |
+
+Top-1 moves the same way: +0.09, +0.03 and +0.31 points. The automatic bands
+are never worse and win at 3 bits, where the ffn tensors outside the bands
+drop furthest. On the 27B the head blocks do not earn their band; on the
+Qwen3.5-4B the scan tied with the fractions instead. So the scan is worth its
+~35 min on every new model, and its bands are the ones to ship.
+
+The node that ran it (`node_scan`: scan, bands, three rungs, KLD) was a one-off
+uploaded to the box; the logs are in the rehearsal metrics repo under `stageb/`.
+
 ### Measured: the 2B smoke, 2026-09-25
 
 Off the hub (`--local-hub`, 48 KLD chunks, full imatrix, all 16 rungs), box
