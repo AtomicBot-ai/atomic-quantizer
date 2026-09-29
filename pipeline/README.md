@@ -152,11 +152,16 @@ with bands of the same size from each source, KLD against BF16, 30 chunks:
 | 12 + 4 (3 103 MB) | **0.009432** | 0.009512 | 0.010997 | B2 0.011308 |
 | 16 + 4 (3 164 MB) | 0.008339 | 0.008375 | 0.010104 | G 0.007143 |
 
-- The fractions stay the default for dense. The scan ranks the ffn quarters
-  tail, head, third, second (each step beyond 2 SE), which is the August prior,
-  and its bands tie with the fractions (under 1 % of KLD). Run the scan on a new
-  architecture to check the prior before release, and take its bands only
-  where it disagrees.
+- Where the bands go depends on the model, so the scan runs on every new one
+  and its bands go in with --bands-from; the fractions are the fallback when
+  there is no time for it. On the 4B the scan ranks the ffn quarters tail,
+  head, third, second (each step beyond 2 SE), the August prior, and its bands
+  tie with the fractions (under 1 % of KLD). On Qwen3.8-27B (rehearsal,
+  2026-09-29, 87 chunks) the tail quarter costs three times the others and
+  the head is no more sensitive than the middle: scan bands (edge 48-63,
+  mid 40-47 against August 0-3 + 52-63, mid 4-11) tie at AD-Q5_K_M-Q4_K_M and
+  AD-IQ4_XS and win at AD-IQ3_S, -4.6 % KLD (z -4.7), top-1 +0.31 pp. Logs in
+  AtomicChat/Qwen3.8-27B-GGUF-metrics-rehearsal, stageb/.
 - band_select on raw Sum(Act^2) is not a default: on ffn_down the sum grows
   with depth, so it bands only the tail, drops blocks 0-7, and loses 9-21 % to
   the fractions at every size.
