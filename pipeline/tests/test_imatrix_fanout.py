@@ -82,3 +82,25 @@ def test_a_failed_box_stops_before_the_merge(monkeypatch):
 def test_single_box_is_the_old_path(monkeypatch):
     calls, _, kept = stage(monkeypatch, [box("b0", 4)])
     assert calls == [("b0", "0 1", None, 2)] and kept == []
+
+
+def inv_of(*tensors):
+    return {"tensors": [{"name": n, "type": t, "shape": s} for n, t, s in tensors]}
+
+
+def test_gpu_bytes_leaves_the_host_tables_out():
+    import gguf_inventory
+    # Flash-Next in miniature: the PLE table (TENSOR_READ_LAZY) and token_embd stay on the host
+    inv = inv_of(("token_embd.weight", "bf16", [2560, 1000]),
+                 ("per_layer_token_embd.weight", "bf16", [160, 100000]),
+                 ("output.weight", "bf16", [2560, 1000]),
+                 ("blk.0.ffn_gate_exps.weight", "bf16", [2560, 640, 8]),
+                 ("blk.0.attn_norm.weight", "f32", [2560]))
+    assert gguf_inventory.gpu_bytes(inv) == 2560 * 1000 * 2 + 2560 * 640 * 8 * 2 + 2560 * 4
+
+
+def test_gpu_bytes_counts_a_tied_head_once():
+    import gguf_inventory
+    # no output.weight: llama.cpp duplicates token_embd onto the GPU as the head
+    inv = inv_of(("token_embd.weight", "bf16", [1024, 1000]), ("blk.0.attn_q.weight", "bf16", [1024, 1024]))
+    assert gguf_inventory.gpu_bytes(inv) == (1024 * 1000 + 1024 * 1024) * 2

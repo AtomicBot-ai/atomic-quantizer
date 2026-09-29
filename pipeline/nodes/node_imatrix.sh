@@ -57,15 +57,19 @@ if [ "$NGPU" -gt 0 ]; then
 import json
 inv = json.load(open('$INVENTORY'))
 print(next(t['shape'][1] for t in inv['tensors'] if t['name'] == 'token_embd.weight'))")
+    # the GET_ROWS tables stay on the host (gguf_inventory.HOST_TABLES): 103 GB of Flash-Next's 354
     MODEL_BYTES=$("$PY" -c "
-import json, math
-inv = json.load(open('$INVENTORY'))
-print(sum(math.prod(t['shape']) * (4 if t['type'] == 'f32' else 2) for t in inv['tensors']))")
+import json, sys
+sys.path.insert(0, '$PIPE/lib')
+import gguf_inventory
+print(gguf_inventory.gpu_bytes(json.load(open('$INVENTORY'))))")
     PER_GPU_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
     HAVE_GB=$(( PER_GPU_MB * GPER / 1000 ))
-    # largest batch that fits: 8192 is fastest (foundry), 27B on a 5090 pair only takes 4096
+    # largest batch that fits: 8192 is fastest (foundry), 27B on a 5090 pair only takes 4096.
+    # 3 GB per GPU for the context and compute buffers (Flash-Next, 8 cards at batch 4096: ~2.5 GB
+    # each, 5.3 on the last one), so a model that only fits the sum of the cards is refused
     for b in ${IM_BATCH/auto/8192 4096 2048 1024}; do
-        NEED_GB=$(( MODEL_BYTES / 1000000000 + VOCAB * b * 4 / 1000000000 + 4 ))
+        NEED_GB=$(( MODEL_BYTES / 1000000000 + VOCAB * b * 4 / 1000000000 + 1 + 3 * GPER ))
         if [ "$NEED_GB" -le "$HAVE_GB" ]; then IM_BATCH=$b; break; fi
     done
     [ "$NEED_GB" -le "$HAVE_GB" ] \
