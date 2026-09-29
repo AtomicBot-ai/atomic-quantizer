@@ -22,6 +22,9 @@ died is resumed by running the same command again. The hub is the only state.
 | `profiles/dense-hybrid.yaml` | the Qwen3.8-27B August ladder (16 rungs) as roles |
 | `profiles/moe-hybrid.yaml` | the Ling-3.0-flash August ladder (21 rungs + 2 controls) as roles |
 | `profiles/qwen35-masks.yaml` | the hand masks measured on Qwen3.5-4B (stock Q5_K_S, F1, the kept mask as AD-Q5_K_S) for small tied Qwen3.5 |
+| `lib/band_select.py` | bands from `llama-imatrix --show-statistics`: blocks in falling Sum(Act^2) of the band tensor -> `bands.json` for `ladder_gen --bands-from` |
+| `lib/scan.py` | sensitivity scan: groups (roles x quarters of depth) from the inventory, one group two steps down at a time, dKLD per GB saved -> `scan.json`; its quarter ranking -> `bands.json` |
+| `lib/kld_diff.py` | paired difference of two KLD logs chunk by chunk: SE and bootstrap over chunks, refuses logs of different benches |
 | `lib/gguf_inventory.py` | tensor names, types and shapes from a BF16 GGUF (or a quantize log) |
 | `lib/verify_quant.py` | after every quantize: each tensor's type, the override set, no fallbacks, commit, size |
 | `lib/results.py` | KLD log -> row, rows -> `results.json` (pinned schema, sizes always filled) |
@@ -123,6 +126,47 @@ ladder says:
 Bands (edge and mid blocks that get more bits) are counted among the blocks that
 carry the band tensor, MTP excluded; the dense profile uses fractions of depth
 that give exactly the August 4/12/8 on 64 blocks.
+
+### Choosing the bands on a new model
+
+```bash
+# measured: roles x quarters of depth, one group two steps down at a time (about 1 h on a 4B, Mac)
+python lib/scan.py plan   --inventory inventory.json --out scan/
+python lib/scan.py run    scan/ --bin <llama.cpp>/build/bin --bf16 M-BF16.gguf --imatrix imatrix.gguf \
+                          --eval eval_neutral.txt --ref base.kld --chunks 32 [--part I/N]
+python lib/scan.py report scan/
+python lib/scan.py bands  scan/scan.json --inventory inventory.json --profile profiles/dense-hybrid.yaml -o bands.json
+# free, from the imatrix statistics alone
+python lib/band_select.py stats.txt --inventory inventory.json --profile profiles/dense-hybrid.yaml -o bands.json
+python lib/ladder_gen.py --inventory inventory.json --profile profiles/dense-hybrid.yaml --bands-from bands.json --out ladder/
+# any two candidates: paired over chunks, SE and bootstrap interval
+python lib/kld_diff.py kld-A.log kld-B.log
+```
+
+Measured on Qwen3.5-4B (2026-09-29, `tests/test_bands_4b.py`), AD-Q5_K_M-Q4_K_M
+with bands of the same size from each source, KLD against BF16, 30 chunks:
+
+| edge + mid | fractions | scan | band_select | hand mask, same size |
+|---|---|---|---|---|
+| 8 + 4 (3 042 MB) | 0.010849 | 0.010940 | 0.011881 | |
+| 12 + 4 (3 103 MB) | **0.009432** | 0.009512 | 0.010997 | B2 0.011308 |
+| 16 + 4 (3 164 MB) | 0.008339 | 0.008375 | 0.010104 | G 0.007143 |
+
+- The fractions stay the default for dense. The scan ranks the ffn quarters
+  tail, head, third, second (each step beyond 2 SE), which is the August prior,
+  and its bands tie with the fractions (under 1 % of KLD). Run the scan on a new
+  architecture to check the prior before release, and take its bands only
+  where it disagrees.
+- band_select on raw Sum(Act^2) is not a default: on ffn_down the sum grows
+  with depth, so it bands only the tail, drops blocks 0-7, and loses 9-21 % to
+  the fractions at every size.
+- Against the hand masks: both beat B2 by a sixth at its size (z about -10).
+  None beats G, because at 3.16 GB the rung, not the bands, is wrong: AD-Q5_K_M
+  with no bands at all (every ffn tensor q5_K, 3 168 MB) gives 0.006437, 10 %
+  under G. Big bands on a q4_K rung buy less than one type up for the whole ffn.
+- The scan also ranks the roles per GB saved: attn_k/attn_v first (the q8_0
+  rule), then attn_output, ffn_down of the tail, ssm_out, the first quarter of
+  attn_qkv and the tied head; attn_gate below ssm_out; the middle of the ffn last.
 
 A model with tied embeddings (no `output.weight`: the small Qwen3.5 models)
 uses `token_embd.weight` as its head. `tied_embeddings: output` in a profile
