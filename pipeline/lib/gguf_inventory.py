@@ -3,6 +3,7 @@
 
     gguf_inventory.py MODEL-BF16-00001-of-00002.gguf -o inventory.json
     gguf_inventory.py --from-log quantize-AD-Q4_K.log -o inventory.json
+    gguf_inventory.py --from-convert-log convert-dry-run.log -o inventory.json
 
 The ladder generator works only from this file, so it runs on a laptop without
 the weights. Shapes are in ggml order (ne0 first, ne0 is the row length).
@@ -64,6 +65,39 @@ def from_log(path):
     return finish(arch, blocks, tensors, os.path.basename(path), meta)
 
 
+# convert_hf_to_gguf.py prints one line per tensor it writes, shape in ggml order:
+#   INFO:hf-to-gguf:blk.0.ffn_down_exps.weight,  torch.bfloat16 --> BF16, shape = {640, 2560, 512}
+CONVERT_LINE = re.compile(r"hf-to-gguf:([\w.]+),\s+\S+ --> (\w+), shape = \{([\d, ]+)\}")
+
+
+def from_convert_log(path, arch=None):
+    """The inventory of a model nobody has converted yet.
+
+    `convert_hf_to_gguf.py --remote REPO --dry-run --outtype bf16` reads only
+    the safetensors headers over HTTP and logs every tensor it would write,
+    after the converter's own renames, splits and stacking. That is the BF16
+    GGUF's tensor list without the download (Qwen3.8-Flash-Next is 354 GB).
+    Some lines repeat (the MTP block is logged twice); the first one counts.
+    The log carries no metadata, so the block count is the highest block
+    index plus one, which is how the converter numbers an MTP block too.
+    """
+    with open(path, errors="replace") as f:
+        text = f.read()
+    seen, tensors = set(), []
+    for name, typ, dims in CONVERT_LINE.findall(text):
+        if name in seen:
+            continue
+        seen.add(name)
+        shape = [int(x) for x in dims.split(",")]
+        tensors.append({"name": name, "type": typ.lower(), "shape": shape + [1] * (4 - len(shape))})
+    if not tensors:
+        raise SystemExit(f"{path}: no tensor lines, is this a convert_hf_to_gguf.py log?")
+    hf_class = (m.group(1) if (m := re.search(r"Model architecture: (\w+)", text)) else None)
+    blocks = [b for t in tensors if (b := re.match(r"blk\.(\d+)\.", t["name"]))]
+    count = max(int(b.group(1)) for b in blocks) + 1 if blocks else None
+    return finish(arch or hf_class, count, tensors, os.path.basename(path), {"hf_class": hf_class})
+
+
 def from_gguf(path):
     from gguf import GGUFReader
 
@@ -107,12 +141,17 @@ def from_gguf(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("gguf", nargs="?")
-    ap.add_argument("--from-log")
+    ap.add_argument("--from-log", help="a llama-quantize log")
+    ap.add_argument("--from-convert-log", help="a convert_hf_to_gguf.py --dry-run log")
+    ap.add_argument("--arch", help="GGUF architecture name for --from-convert-log (the log has only the HF class)")
     ap.add_argument("-o", "--out", default="-")
     a = ap.parse_args()
-    if bool(a.gguf) == bool(a.from_log):
-        ap.error("give either a GGUF file or --from-log")
-    inv = from_log(a.from_log) if a.from_log else from_gguf(a.gguf)
+    if sum(map(bool, (a.gguf, a.from_log, a.from_convert_log))) != 1:
+        ap.error("give one of: a GGUF file, --from-log, --from-convert-log")
+    if a.from_convert_log:
+        inv = from_convert_log(a.from_convert_log, a.arch)
+    else:
+        inv = from_log(a.from_log) if a.from_log else from_gguf(a.gguf)
     text = json.dumps(inv, indent=1)
     if a.out == "-":
         print(text)

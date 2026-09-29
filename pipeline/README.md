@@ -22,7 +22,11 @@ died is resumed by running the same command again. The hub is the only state.
 | `profiles/dense-hybrid.yaml` | the Qwen3.8-27B August ladder (16 rungs) as roles |
 | `profiles/moe-hybrid.yaml` | the Ling-3.0-flash August ladder (21 rungs + 2 controls) as roles |
 | `profiles/qwen35-masks.yaml` | the hand masks measured on Qwen3.5-4B (stock Q5_K_S, F1, the kept mask as AD-Q5_K_S) for small tied Qwen3.5 |
-| `lib/gguf_inventory.py` | tensor names, types and shapes from a BF16 GGUF (or a quantize log) |
+| `profiles/moe-qwen4exp.yaml` | the MoE variant of the Qwen line (`qwen4exp`, proxy Qwen3.8-Flash-Next): PLE table by rule, block-32 types on the 640/320/160 rows, mxfp4 refused; 11 rungs + a flat control |
+| `lib/probe_arch.py` | one table row per model before any download: arch, blocks, row lengths not /256 with their share, vocab, tokenizer and template hashes, MTP, vision, GET_ROWS share |
+| `lib/corpus_check.py` | the chat template against every construct the corpus uses (parallel tool calls, earlier reasoning, thinking off, vision); marker counts and vocabulary coverage of a build |
+| `lib/im_report.py` | from an imatrix GGUF alone: dead and weak experts (`.counts`), N vs 2N convergence per expert, the `--show-statistics` table for `band_select.py` |
+| `lib/gguf_inventory.py` | tensor names, types and shapes from a BF16 GGUF, a quantize log, or a `convert_hf_to_gguf.py --remote --dry-run` log (no download) |
 | `lib/verify_quant.py` | after every quantize: each tensor's type, the override set, no fallbacks, commit, size |
 | `lib/results.py` | KLD log -> row, rows -> `results.json` (pinned schema, sizes always filled) |
 | `lib/make_card.py` | README draft from the metrics repo: file table, card-size table, measurement protocol, reproduce commands; editorial sections left as TODO comments |
@@ -175,5 +179,5 @@ listed when the stage ends.
 - speed numbers (llama-bench) and the vision check in the card;
 - runs across several boxes (imatrix shards and quant rungs are written for it,
   the driver rents one box per stage group);
-- MoE profile values for a Qwen-style MoE (Flash-Next tensor names were never
-  published); the generator will list every uncovered group on the day.
+- `moe-qwen4exp` is checked against the tensors of Flash-Next and replays its
+  published file, but no rung of it has been quantized and measured yet.

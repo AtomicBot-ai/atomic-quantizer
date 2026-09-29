@@ -1,0 +1,92 @@
+# MoE with a PLE n-gram table and hyper-connections: llama.cpp arch qwen4exp.
+#
+# Written for the MoE variant of Qwen 4 before it exists, on its proxy
+# Qwen3.8-Flash-Next (convert_hf_to_gguf.py conversion/qwen4exp.py, llama.cpp
+# 6c84c7d5d and later: the pinned 1692f9e50bb2 predates the arch). Where the
+# parameters are on Flash-Next (176.9B, inventory from a --remote --dry-run):
+#   per_layer_token_embd  28.9%  row 160: a GET_ROWS table, no imatrix ever
+#   ffn_gate/up_exps      45.5%  row 2560
+#   ffn_down_exps         22.8%  row 640 (moe_intermediate_size)
+#   everything else        2.7%  attention, GDN, shared expert, hc, router
+#
+# The three August traps (Flash-Next tech brief, KLD 0.2277 -> 0.1074 at the
+# same 85 GB) are rules here, not habits:
+#   - rows of 640, 320 and 160 are not multiples of 256: k and i types there
+#     fall back silently (IQ1_S -> IQ4_NL, Q4_K -> Q5_0). ffn_down_exps,
+#     ffn_down_shexp, hc_*_up and the table take block-32 types only
+#     (q4_0 q4_1 q5_0 q5_1 q8_0 iq4_nl); ladder_gen refuses anything else.
+#   - mxfp4 ignores the imatrix (ggml: GGML_UNUSED(quant_weights)); on
+#     ffn_down_exps it cost 22.8% of the model its calibration. Refused.
+#   - the table is never calibrated, so its bits buy less than the same bits
+#     on the experts: q8_0 on the top rungs, q5_x in the middle, q4_1 and q4_0
+#     below (August: Q5_1 -> Q4_1 was part of the -53%). Legacy types keep
+#     GET_ROWS fast on every backend, the table lives on SSD on a Mac.
+#   The table is set by a rule, never by --token-embedding-type: that flag hits
+#   per_layer_token_embd too (llama-quant.cpp tensor_get_category), and before
+#   6c84c7d5d an explicit rule could not override it.
+#
+# Experts carry the ladder, the rest sits at q8_0 (attn_k/v at 0.01% each have
+# no reason to go lower). ffn_down_exps is one step above gate/up while the
+# block-32 floor allows it; from AD-IQ4_XS down it stays at iq4_nl (4.5 bpw),
+# which is why the 1 and 2 bit rungs differ by less than their names suggest.
+#
+# Bands: gate/up of the band blocks get one or two steps more. The default is
+# the August Flash-Next band as fractions of the depth (blocks 0-3 and 40-47 of
+# 48). On the day, pick it from the imatrix instead:
+#   im_report.py stats imatrix.gguf -o stats.txt
+#   band_select.py stats.txt --inventory inventory.json --profile profiles/moe-qwen4exp.yaml -o bands.json
+#   ladder_gen.py ... --bands-from bands.json
+#
+# Build and measure these five first (release day 6:00-10:00): AD-Q4_K_M,
+# AD-IQ4_XS, AD-IQ3_XXS, AD-IQ2_XS (the August "after" build, 85.3 GB), AD-IQ1_M;
+# IQ2_XS_FLAT beside AD-IQ2_XS attributes the gain to the band.
+name: moe-qwen4exp
+about: qwen4exp MoE (PLE table, hyper-connections), 11 AD rungs from AD-Q8_0 to AD-IQ1_M plus a flat control
+file_type_from: gate_up_exps
+
+bands:
+  group: '^blk\.\d+\.ffn_gate_exps\.weight$'
+  head_frac: 0.0833   # 4 of 48
+  tail_frac: 0.1667   # 8 of 48
+
+no_imatrix:
+  - '^per_layer_token_embd\.weight$'   # GET_ROWS
+  - '^output_hc_(down|up)\.weight$'    # outside blk.*, llama-imatrix never collects it
+
+refuse_types:
+  mxfp4: 'ignores the imatrix (GGML_UNUSED(quant_weights)); on Flash-Next ffn_down_exps lost its calibration this way'
+
+roles:
+  - {name: ple_table,         pattern: '^per_layer_token_embd\.weight$'}
+  - {name: token_embd,        pattern: '^token_embd\.weight$'}
+  - {name: output,            pattern: '^output\.weight$'}
+  - {name: output_hc,         pattern: '^output_hc_(down|up)\.weight$'}
+  - {name: edge_down_exps,    pattern: '^blk\.{edge}\.ffn_down_exps\.weight$'}
+  - {name: edge_gate_up_exps, pattern: '^blk\.{edge}\.ffn_(gate|up)_exps\.weight$'}
+  - {name: down_exps,         pattern: '^blk\.\d+\.ffn_down_exps\.weight$'}
+  - {name: gate_up_exps,      pattern: '^blk\.\d+\.ffn_(gate|up)_exps\.weight$'}
+  - {name: shexp,             pattern: '^blk\.\d+\.ffn_(gate|down|up)_shexp\.weight$'}
+  - {name: attn,              pattern: '^blk\.\d+\.attn_(q|k|v|qkv|gate|output)\.weight$'}
+  - {name: ssm,               pattern: '^blk\.\d+\.ssm_(out|alpha|beta)\.weight$'}
+  - {name: hc,                pattern: '^blk\.\d+\.hc_(attn|ffn)_(down|up|inject)\.weight$'}
+  - {name: ple_proj,          pattern: '^blk\.\d+\.ple_(key|value)\.weight$'}
+  # row of 4: no block type fits, llama-quantize would fall back to f16 anyway
+  - {name: ple_conv,          pattern: '^blk\.\d+\.ple_conv1d\.weight$'}
+
+defaults: {token_embd: q8_0, output: q8_0, output_hc: q8_0, shexp: q8_0, attn: q8_0, ssm: q8_0, hc: q8_0,
+           ple_proj: q8_0, ple_conv: bf16}
+
+rungs:
+  - {label: AD-Q8_0,    ftype: Q8_0,    types: {ple_table: q8_0, edge_down_exps: q8_0,   edge_gate_up_exps: q8_0,    down_exps: q8_0,   gate_up_exps: q8_0}}
+  - {label: AD-Q6_K,    ftype: Q6_K,    types: {ple_table: q8_0, edge_down_exps: q8_0,   edge_gate_up_exps: q8_0,    down_exps: q8_0,   gate_up_exps: q6_k}}
+  - {label: AD-Q5_K_M,  ftype: Q5_K_M,  types: {ple_table: q5_1, edge_down_exps: q8_0,   edge_gate_up_exps: q6_k,    down_exps: q5_1,   gate_up_exps: q5_k}}
+  - {label: AD-Q4_K_M,  ftype: Q4_K_M,  types: {ple_table: q5_0, edge_down_exps: q5_1,   edge_gate_up_exps: q5_k,    down_exps: q5_0,   gate_up_exps: q4_k}}
+  - {label: AD-IQ4_XS,  ftype: IQ4_XS,  types: {ple_table: q4_1, edge_down_exps: q5_0,   edge_gate_up_exps: q5_k,    down_exps: iq4_nl, gate_up_exps: iq4_xs}}
+  - {label: AD-IQ3_M,   ftype: IQ3_M,   types: {ple_table: q4_1, edge_down_exps: q5_0,   edge_gate_up_exps: iq4_xs,  down_exps: iq4_nl, gate_up_exps: iq3_s}}
+  - {label: AD-IQ3_XXS, ftype: IQ3_XXS, types: {ple_table: q4_1, edge_down_exps: iq4_nl, edge_gate_up_exps: iq4_xs,  down_exps: iq4_nl, gate_up_exps: iq3_xxs}}
+  - {label: AD-IQ2_M,   ftype: IQ2_M,   types: {ple_table: q4_1, edge_down_exps: iq4_nl, edge_gate_up_exps: iq3_xxs, down_exps: iq4_nl, gate_up_exps: iq2_s}}
+  - {label: AD-IQ2_XS,  ftype: IQ2_XS,  types: {ple_table: q4_1, edge_down_exps: iq4_nl, edge_gate_up_exps: iq3_xxs, down_exps: iq4_nl, gate_up_exps: iq2_xs}}
+  - {label: AD-IQ2_XXS, ftype: IQ2_XXS, types: {ple_table: q4_0, edge_down_exps: iq4_nl, edge_gate_up_exps: iq2_s,   down_exps: iq4_nl, gate_up_exps: iq2_xxs}}
+  - {label: AD-IQ1_M,   ftype: IQ1_M,   types: {ple_table: q4_0, edge_down_exps: iq4_nl, edge_gate_up_exps: iq2_xxs, down_exps: iq4_nl, gate_up_exps: iq1_m}}
+  # control: AD-IQ2_XS without the band, to attribute the gain to the layout. Built, not published.
+  - {label: IQ2_XS_FLAT, ftype: IQ2_XS, control: true, types: {ple_table: q4_1, edge_down_exps: iq4_nl, edge_gate_up_exps: iq2_xs, down_exps: iq4_nl, gate_up_exps: iq2_xs}}

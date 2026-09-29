@@ -217,6 +217,7 @@ def simulate(profile, rung, rules, inv):
     default = FTYPE[ftype][0]
     flags, _ = rung_flags(profile, rung)
     compiled = [(re.compile(p), t, role) for p, t, role in rules]
+    refuse = {norm_type(k): v for k, v in (profile.get("refuse_types") or {}).items()}
     allow = [re.compile(a) for a in profile.get("allow_fallback") or []]
     no_im = [re.compile(a) for a in profile.get("no_imatrix") or []]
     mtp = set(inv.get("mtp_blocks") or [])
@@ -254,6 +255,8 @@ def simulate(profile, rung, rules, inv):
         exempt = name in TOKEN_EMBD_NAMES or name == "output.weight"
         if typ in NEEDS_IMATRIX and not exempt and (block_of(name) in mtp or any(a.search(name) for a in no_im)):
             errors.append(f"{name}: {typ} needs imatrix data this tensor never gets")
+        if typ in refuse:
+            errors.append(f"{name}: {typ} is refused by the profile: {refuse[typ]}")
         eff[name], why[name] = typ, role
     return eff, why, errors, overrides
 
