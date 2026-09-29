@@ -186,8 +186,23 @@ drop furthest. On the 27B the head blocks do not earn their band; on the
 Qwen3.5-4B the scan tied with the fractions instead. So the scan is worth its
 ~35 min on every new model, and its bands are the ones to ship.
 
-The node that ran it (`node_scan`: scan, bands, three rungs, KLD) was a one-off
+Which band did it? The mid band of the scan (40-47) rests on quarters within
+2 SE of each other, so AD-IQ3_S was built once more with the scan's edge
+(48-63) and the head as mid (0-7), same size. `kld_diff`:
+
+| AD-IQ3_S | mean KLD | against | dKLD | 95% CI | z |
+|---|---|---|---|---|---|
+| edge 48-63, mid 0-7 | 0.030986 | August | -4.6 % | -5.2 .. -3.9 % | -13.4 (lower in 80 of 87 chunks) |
+| scan (edge 48-63, mid 40-47) | 0.030964 | edge 48-63, mid 0-7 | -0.1 % | -2.0 .. +1.7 % | -0.1 (tie) |
+
+The gain is the edge band over the whole last quarter instead of 0-3 + 52-63;
+where the mid band sits does not matter at this size. 17 min, $1.30 with a
+first rental whose two boxes never started.
+
+The nodes that ran it (`node_scan`: scan, bands, three rungs, KLD; `node_bands`:
+fixed bands, one rung) were one-offs
 uploaded to the box; the logs are in the rehearsal metrics repo under `stageb/`.
+Task 2 in total: $24.33 of vast charges (stage A $20.83, scan $2.21, this $1.30).
 
 ### Measured: the 2B smoke, 2026-09-25
 
