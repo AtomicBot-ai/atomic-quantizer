@@ -1,0 +1,81 @@
+# The Qwen3.5-4B masks of 2026-09-24, as rungs the generator can build for any
+# small tied-embedding Qwen3.5 (0.8B to 9B: 24 to 32 blocks, no output.weight).
+#
+# They were written by hand as --tensor-type-file masks on top of a mixture
+# ftype (Q5_K_S), measured, and the best one kept. Here each is spelled out
+# with full coverage on a Q8_0 base, so llama.cpp's own per tensor logic
+# decides nothing, and tests/test_qwen35_masks.py replays the original
+# quantize logs tensor for tensor.
+#
+# Measured on Qwen3.5-4B (32 blocks + MTP), imatrix on the 4B BF16, KLD against
+# BF16 over eval/neutral, 30 chunks of 4096, one build of llama.cpp:
+#
+#   build                                   MB    mean KLD   top-1 %
+#   Q4_K_M, stock + imatrix              2 783    0.024006    92.78
+#   Q5_K_S, stock        (rung Q5_K_S)   3 118    0.007951    95.61
+#   F1: head q5_K, gates q6_K (F1)       3 116    0.008251    95.36
+#   G:  k/v q8_0, edge down q6_K         3 159    0.007143    95.73   <- AD-Q5_K_S
+#   Q5_K_M, stock                        3 203    0.006731    95.87
+#
+# and, measured later on the same bench, the dense-hybrid ladder once the tied
+# head took the output types (profiles/dense-hybrid.yaml):
+#
+#   dense-hybrid AD-Q4_K_M               2 841    0.015298    94.06
+#   dense-hybrid AD-Q5_K_M               3 281    0.004567    96.48
+#
+# The ladder beats every mask here by about a third at a few percent more
+# bytes, so releases use dense-hybrid. This profile is the record of the masks:
+# their controls rebuild bit for bit (tests/test_qwen35_small.py), and G stays
+# buildable as a reference point for the next small Qwen.
+#
+# What they say:
+#   - the base type carries almost everything. G beats stock Q5_K_S by 10 %
+#     for 1.3 % more bytes, a little better than the straight line from stock
+#     Q5_K_S to stock Q5_K_M (0.00736 at that size). The masks on a Q4_K_M base
+#     (B0-B3: 2.9-3.1 GB, 0.011-0.020) were all worse than the straight line
+#     from stock Q4_K_M to stock Q5_K_S.
+#   - the tied head (token_embd = output, 14.7 % of the 4B) must stay at q6_K:
+#     F1 took it to q5_K and put the bytes into attn_gate/ssm_out, and lost.
+#   - attn_k/attn_v at q8_0 cost 0.5 % of the file; under a turbo3 KV cache
+#     they bought nothing (G and stock Q5_K_S both lose +0.0106 there).
+#
+# Edges are ffn_down of the first and last 4 of 32 blocks, as fractions so a
+# 24 block 2B gets 3 + 3.
+name: qwen35-masks
+about: hand masks for small tied Qwen3.5, measured on the 4B; controls plus the kept mask
+ftype: Q8_0
+file_type_from: ffn
+
+tied_embeddings: output   # no output.weight: token_embd is the head and takes the output type
+
+bands:
+  group: '^blk\.\d+\.ffn_down\.weight$'
+  head_frac: 0.125   # 4 of 32
+  tail_frac: 0.125   # 4 of 32
+
+mtp:
+  type: q8_0         # what stock Q5_K_S gives the NextN block; the imatrix never sees it
+
+roles:
+  - {name: edge_ffn_down, pattern: '^blk\.{edge}\.ffn_down\.weight$'}
+  - {name: ffn,        pattern: '^blk\.\d+\.ffn_(down|gate|up)\.weight$'}
+  - {name: attn_kv,    pattern: '^blk\.\d+\.attn_(k|v)\.weight$'}
+  - {name: attn_gate,  pattern: '^blk\.\d+\.attn_gate\.weight$'}
+  - {name: attn,       pattern: '^blk\.\d+\.attn_(q|qkv|output)\.weight$'}
+  - {name: ssm_out,    pattern: '^blk\.\d+\.ssm_out\.weight$'}
+  - {name: ssm_ab,     pattern: '^blk\.\d+\.ssm_(alpha|beta)\.weight$'}
+  - {name: output,     pattern: '^output\.weight$'}
+  - {name: token_embd, pattern: '^token_embd\.weight$'}
+
+rungs:
+  # stock Q5_K_S, what llama-quantize gives this family on its own
+  - label: Q5_K_S
+    control: true
+    types: {ffn: q5_k, attn_kv: q5_k, attn_gate: q5_k, attn: q5_k, ssm_out: q5_k, ssm_ab: q5_k, output: q6_k, token_embd: q5_k}
+  # mask F1: the head down a step, the DeltaNet gates up a step. Lost to stock.
+  - label: F1
+    control: true
+    types: {ffn: q5_k, attn_kv: q8_0, attn_gate: q6_k, attn: q5_k, ssm_out: q6_k, ssm_ab: q5_k, output: q5_k, token_embd: q5_k}
+  # mask G (qwen35-4b-mask.txt): stock Q5_K_S plus k/v at q8_0 and the edge ffn_down at q6_K. Kept.
+  - label: AD-Q5_K_S
+    types: {edge_ffn_down: q6_k, ffn: q5_k, attn_kv: q8_0, attn_gate: q5_k, attn: q5_k, ssm_out: q5_k, ssm_ab: q5_k, output: q6_k, token_embd: q5_k}

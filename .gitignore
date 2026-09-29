@@ -1,0 +1,4 @@
+pipeline/tests/.cache/
+pipeline/runs/
+__pycache__/
+*.pyc

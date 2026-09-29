@@ -1,0 +1,450 @@
+[
+ {
+  "name": "Qwen3.5-2B-AD-IQ1_M",
+  "label": "AD-IQ1_M",
+  "publisher": "atomicchat",
+  "size_bytes": 718277664,
+  "size_gb": 0.72,
+  "bpw": 2.91,
+  "file_type": 31,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 1.354178,
+    "median_kld": 1.005757,
+    "max_kld": 15.141868,
+    "q99_kld": 5.815161,
+    "q999_kld": 8.590685,
+    "top1_pct": 45.045,
+    "mean_dp_pct": -23.128,
+    "rms_dp_pct": 38.566,
+    "ppl": 29.398549,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 3.863452,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-IQ2_XXS",
+  "label": "AD-IQ2_XXS",
+  "publisher": "atomicchat",
+  "size_bytes": 743836704,
+  "size_gb": 0.74,
+  "bpw": 3.02,
+  "file_type": 19,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 1.128508,
+    "median_kld": 0.814217,
+    "max_kld": 11.757558,
+    "q99_kld": 5.224391,
+    "q999_kld": 7.850542,
+    "top1_pct": 49.551,
+    "mean_dp_pct": -20.482,
+    "rms_dp_pct": 35.652,
+    "ppl": 23.46753,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 3.084019,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-IQ2_XS",
+  "label": "AD-IQ2_XS",
+  "publisher": "atomicchat",
+  "size_bytes": 790629408,
+  "size_gb": 0.79,
+  "bpw": 3.21,
+  "file_type": 20,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.659309,
+    "median_kld": 0.4396,
+    "max_kld": 11.313021,
+    "q99_kld": 3.670532,
+    "q999_kld": 6.207755,
+    "top1_pct": 60.475,
+    "mean_dp_pct": -14.099,
+    "rms_dp_pct": 27.784,
+    "ppl": 14.682742,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.929553,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-IQ2_S-IQ2_XS",
+  "label": "AD-IQ2_S-IQ2_XS",
+  "publisher": "atomicchat",
+  "size_bytes": 813435936,
+  "size_gb": 0.81,
+  "bpw": 3.3,
+  "file_type": 20,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.552494,
+    "median_kld": 0.358942,
+    "max_kld": 12.181479,
+    "q99_kld": 3.275202,
+    "q999_kld": 5.486593,
+    "top1_pct": 63.475,
+    "mean_dp_pct": -12.428,
+    "rms_dp_pct": 25.511,
+    "ppl": 13.169596,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.730701,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-IQ2_S",
+  "label": "AD-IQ2_S",
+  "publisher": "atomicchat",
+  "size_bytes": 854133792,
+  "size_gb": 0.85,
+  "bpw": 3.47,
+  "file_type": 28,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.355283,
+    "median_kld": 0.226865,
+    "max_kld": 9.01531,
+    "q99_kld": 2.25309,
+    "q999_kld": 4.350761,
+    "top1_pct": 70.194,
+    "mean_dp_pct": -8.959,
+    "rms_dp_pct": 20.258,
+    "ppl": 10.800461,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.419358,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-IQ3_XXS",
+  "label": "AD-IQ3_XXS",
+  "publisher": "atomicchat",
+  "size_bytes": 905448480,
+  "size_gb": 0.91,
+  "bpw": 3.68,
+  "file_type": 23,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.212368,
+    "median_kld": 0.129343,
+    "max_kld": 9.182299,
+    "q99_kld": 1.529223,
+    "q999_kld": 3.387183,
+    "top1_pct": 76.635,
+    "mean_dp_pct": -5.376,
+    "rms_dp_pct": 15.126,
+    "ppl": 9.365599,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.230794,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-IQ3_S-IQ3_XXS",
+  "label": "AD-IQ3_S-IQ3_XXS",
+  "publisher": "atomicchat",
+  "size_bytes": 955878432,
+  "size_gb": 0.96,
+  "bpw": 3.89,
+  "file_type": 23,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.132137,
+    "median_kld": 0.07883,
+    "max_kld": 6.318025,
+    "q99_kld": 0.945269,
+    "q999_kld": 2.230865,
+    "top1_pct": 81.156,
+    "mean_dp_pct": -3.211,
+    "rms_dp_pct": 11.595,
+    "ppl": 8.649148,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.13664,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-IQ3_S",
+  "label": "AD-IQ3_S",
+  "publisher": "atomicchat",
+  "size_bytes": 1012010016,
+  "size_gb": 1.01,
+  "bpw": 4.12,
+  "file_type": 26,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.097095,
+    "median_kld": 0.059135,
+    "max_kld": 5.179125,
+    "q99_kld": 0.689809,
+    "q999_kld": 1.788624,
+    "top1_pct": 83.608,
+    "mean_dp_pct": -2.261,
+    "rms_dp_pct": 9.764,
+    "ppl": 8.391508,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.102782,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-IQ4_XS-IQ3_S",
+  "label": "AD-IQ4_XS-IQ3_S",
+  "publisher": "atomicchat",
+  "size_bytes": 1042877472,
+  "size_gb": 1.04,
+  "bpw": 4.25,
+  "file_type": 26,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.082056,
+    "median_kld": 0.05065,
+    "max_kld": 5.801763,
+    "q99_kld": 0.587313,
+    "q999_kld": 1.506069,
+    "top1_pct": 84.799,
+    "mean_dp_pct": -2.003,
+    "rms_dp_pct": 9.028,
+    "ppl": 8.254504,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.084777,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-IQ4_XS",
+  "label": "AD-IQ4_XS",
+  "publisher": "atomicchat",
+  "size_bytes": 1142950944,
+  "size_gb": 1.14,
+  "bpw": 4.66,
+  "file_type": 30,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.045389,
+    "median_kld": 0.028894,
+    "max_kld": 3.816843,
+    "q99_kld": 0.314255,
+    "q999_kld": 0.866202,
+    "top1_pct": 88.172,
+    "mean_dp_pct": -1.136,
+    "rms_dp_pct": 6.597,
+    "ppl": 7.946373,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.044284,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-Q4_K_M",
+  "label": "AD-Q4_K_M",
+  "publisher": "atomicchat",
+  "size_bytes": 1176767520,
+  "size_gb": 1.18,
+  "bpw": 4.8,
+  "file_type": 15,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.04074,
+    "median_kld": 0.026301,
+    "max_kld": 3.92147,
+    "q99_kld": 0.276587,
+    "q999_kld": 0.77419,
+    "top1_pct": 88.743,
+    "mean_dp_pct": -0.938,
+    "rms_dp_pct": 6.272,
+    "ppl": 7.914634,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.040113,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-Q5_K_M-Q4_K_M",
+  "label": "AD-Q5_K_M-Q4_K_M",
+  "publisher": "atomicchat",
+  "size_bytes": 1253936160,
+  "size_gb": 1.25,
+  "bpw": 5.12,
+  "file_type": 15,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.031086,
+    "median_kld": 0.020864,
+    "max_kld": 4.372983,
+    "q99_kld": 0.201035,
+    "q999_kld": 0.584262,
+    "top1_pct": 89.919,
+    "mean_dp_pct": -0.645,
+    "rms_dp_pct": 5.404,
+    "ppl": 7.837238,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.029942,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-Q5_K_M",
+  "label": "AD-Q5_K_M",
+  "publisher": "atomicchat",
+  "size_bytes": 1363512352,
+  "size_gb": 1.36,
+  "bpw": 5.57,
+  "file_type": 17,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.019963,
+    "median_kld": 0.013886,
+    "max_kld": 1.657528,
+    "q99_kld": 0.12452,
+    "q999_kld": 0.347922,
+    "top1_pct": 91.756,
+    "mean_dp_pct": -0.415,
+    "rms_dp_pct": 4.203,
+    "ppl": 7.75856,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.019602,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-Q6_K-Q5_K",
+  "label": "AD-Q6_K-Q5_K",
+  "publisher": "atomicchat",
+  "size_bytes": 1557138464,
+  "size_gb": 1.56,
+  "bpw": 6.37,
+  "file_type": 17,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.008008,
+    "median_kld": 0.005194,
+    "max_kld": 0.673685,
+    "q99_kld": 0.054341,
+    "q999_kld": 0.157666,
+    "top1_pct": 94.967,
+    "mean_dp_pct": -0.196,
+    "rms_dp_pct": 2.666,
+    "ppl": 7.671464,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.008156,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-AD-Q6_K",
+  "label": "AD-Q6_K",
+  "publisher": "atomicchat",
+  "size_bytes": 1831406624,
+  "size_gb": 1.83,
+  "bpw": 7.5,
+  "file_type": 18,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.002319,
+    "median_kld": 0.001358,
+    "max_kld": 0.296825,
+    "q99_kld": 0.017057,
+    "q999_kld": 0.045052,
+    "top1_pct": 97.356,
+    "mean_dp_pct": -0.076,
+    "rms_dp_pct": 1.429,
+    "ppl": 7.628372,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.002493,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ },
+ {
+  "name": "Qwen3.5-2B-Q8_0",
+  "label": "Q8_0",
+  "publisher": "atomicchat",
+  "size_bytes": 2053868576,
+  "size_gb": 2.05,
+  "bpw": 8.41,
+  "file_type": null,
+  "llama_commit": "1692f9e50bb20fd96b963af38a282daf78feea64",
+  "measured_on": "7ccbc032a13c",
+  "quality": {
+   "neutral": {
+    "mean_kld": 0.001312,
+    "median_kld": 0.000788,
+    "max_kld": 0.474261,
+    "q99_kld": 0.009387,
+    "q999_kld": 0.026972,
+    "top1_pct": 97.984,
+    "mean_dp_pct": -0.037,
+    "rms_dp_pct": 1.082,
+    "ppl": 7.62014,
+    "ppl_base": 7.609399,
+    "ppl_ratio": 1.001412,
+    "chunks": 48,
+    "ctx": 4096
+   }
+  }
+ }
+]

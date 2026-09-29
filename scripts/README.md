@@ -104,24 +104,6 @@ export FOUNDRY_PIN_DATE=2026-08-14
 > box has already cloned calib-corpora at that point, the function could read
 > from the clone and this duplicate could go.
 
-## ABLITERATION
-
-1. curl foundry
-2. load model:
-
-```bash
-use_model qwen3.8-flash-next Qwen/Qwen3.8-Flash-Next
-```
-
-3. convert and convert to gguf:
-
-```bash
-abliterate_and_convert_to_gguf
-```
--> /abliterated-Qwen/Qwen3.8-Flash-Next
-
-4. use test_chat e.t.c. to ensure abliterated model works
-
 ## How they are meant to be used
 
 Source, then call one function at a time in the foreground. Every function
@@ -140,8 +122,8 @@ eats whatever sat between them, and this is what catches that.
 
 ## `bonsai/`
 
-Refusal ablation for PrismML's Ternary Bonsai 2 27B. `abliterate.py` cannot be used there:
-the pack is ternary, and a dense weight edit rounds away when written back. These tools
+Refusal ablation for PrismML's Ternary Bonsai 2 27B. A dense weight edit cannot be used there:
+the pack is ternary, and the edit rounds away when written back. These tools
 build the same projection as a rank-1 LoRA that llama.cpp keeps in the graph, verify it
 inside the running model, and measure what it costs. Nine files, all of them run from the
 repository root against a local pack; see

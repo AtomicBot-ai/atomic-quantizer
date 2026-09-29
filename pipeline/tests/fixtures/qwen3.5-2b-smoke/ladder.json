@@ -1,0 +1,1326 @@
+{
+ "profile": "dense-hybrid",
+ "inventory": "Qwen3.5-2B-BF16.gguf",
+ "arch": "qwen35",
+ "block_count": 25,
+ "mtp_blocks": [
+  24
+ ],
+ "bands": {
+  "edge": [
+   0,
+   1,
+   19,
+   20,
+   21,
+   22,
+   23
+  ],
+  "mid": [
+   2,
+   3,
+   4
+  ]
+ },
+ "rungs": [
+  {
+   "label": "Q8_0",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": null,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ]
+   ],
+   "rules_sha256": "8ffefe130646f95d6dc44d54d9cea63fb044b0902789b8491815b7c62dbd8630",
+   "expected_overrides": 8,
+   "type_counts": {
+    "f32": 140,
+    "q5_k": 8,
+    "q8_0": 187
+   },
+   "predicted_bytes": 2042905856,
+   "predicted_gib": 1.903,
+   "predicted_bpw": 8.413,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-Q6_K",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 18,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "q8_0"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "q8_0"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "q8_0"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q8_0"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "q8_0"
+    ]
+   ],
+   "rules_sha256": "f5d46c5e4b49826738856a5558816fc3ef3784ebb7c55fd9e8318c803dd5208b",
+   "expected_overrides": 83,
+   "type_counts": {
+    "f32": 140,
+    "q5_k": 8,
+    "q6_k": 75,
+    "q8_0": 112
+   },
+   "predicted_bytes": 1820443904,
+   "predicted_gib": 1.695,
+   "predicted_bpw": 7.497,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-Q6_K-Q5_K",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 17,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "q8_0"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "q8_0"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "q8_0"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q8_0"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "q5_k"
+    ]
+   ],
+   "rules_sha256": "cbb3afdc135cd18a61859dd826eed12efa354bd2ae6c72e10b9109bc2ef6f69e",
+   "expected_overrides": 84,
+   "type_counts": {
+    "f32": 140,
+    "q5_k": 61,
+    "q6_k": 23,
+    "q8_0": 111
+   },
+   "predicted_bytes": 1546175744,
+   "predicted_gib": 1.44,
+   "predicted_bpw": 6.367,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-Q5_K_M",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 17,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "q4_k"
+    ]
+   ],
+   "rules_sha256": "964202ac4ebe7e467b67f3f291623600469eba50e2af41c11b70a4880b594553",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "q4_k": 1,
+    "q5_k": 74,
+    "q6_k": 72,
+    "q8_0": 48
+   },
+   "predicted_bytes": 1352549632,
+   "predicted_gib": 1.26,
+   "predicted_bpw": 5.57,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-Q5_K_M-Q4_K_M",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 15,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "bd438475c7f1e4068a943fc947fae715fe39a970ff613951209d7a230295f38f",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq4_xs": 1,
+    "q4_k": 52,
+    "q5_k": 31,
+    "q6_k": 63,
+    "q8_0": 48
+   },
+   "predicted_bytes": 1242973440,
+   "predicted_gib": 1.158,
+   "predicted_bpw": 5.119,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-Q4_K_M",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 15,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "d6f605b25a0ea8a5b954242e505acbbfc77367f0495cd744918bc590612f1cc6",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq4_xs": 1,
+    "q4_k": 66,
+    "q5_k": 74,
+    "q6_k": 6,
+    "q8_0": 48
+   },
+   "predicted_bytes": 1165804800,
+   "predicted_gib": 1.086,
+   "predicted_bpw": 4.801,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-IQ4_XS",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 30,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q6_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "0a907b187b9f67a996e167c89e546dc4209cbe7b62d1e1a699ec95522fdc033a",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq4_xs": 53,
+    "q4_k": 23,
+    "q5_k": 65,
+    "q6_k": 6,
+    "q8_0": 48
+   },
+   "predicted_bytes": 1131988224,
+   "predicted_gib": 1.054,
+   "predicted_bpw": 4.662,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-IQ4_XS-IQ3_S",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 26,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "148ff501f8b4b8c714228983c23dc5355f75595d4bc276dc439dbbe389094d31",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq3_s": 28,
+    "iq4_xs": 48,
+    "q4_k": 57,
+    "q5_k": 14,
+    "q8_0": 48
+   },
+   "predicted_bytes": 1031914752,
+   "predicted_gib": 0.961,
+   "predicted_bpw": 4.25,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-IQ3_S",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 26,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "6361159fe807d521018af14facb500ac779f55470ead3c68a3f66ac14ab689e6",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq3_s": 42,
+    "iq4_xs": 91,
+    "q5_k": 14,
+    "q8_0": 48
+   },
+   "predicted_bytes": 1001047296,
+   "predicted_gib": 0.932,
+   "predicted_bpw": 4.122,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-IQ3_S-IQ3_XXS",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 23,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "1891e4a0f3e2138d8be19d7291cbd320e1f8c4e931b529ffa23a17ab758b5d45",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq3_s": 47,
+    "iq3_xxs": 28,
+    "iq4_xs": 58,
+    "q5_k": 14,
+    "q8_0": 48
+   },
+   "predicted_bytes": 944915712,
+   "predicted_gib": 0.88,
+   "predicted_bpw": 3.891,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-IQ3_XXS",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 23,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "caa6232d089a0d8f3f44d9247a54fb780c8b0b6890b788a1e7b1e389b6484de4",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq3_s": 90,
+    "iq3_xxs": 42,
+    "iq4_xs": 1,
+    "q5_k": 14,
+    "q8_0": 48
+   },
+   "predicted_bytes": 894485760,
+   "predicted_gib": 0.833,
+   "predicted_bpw": 3.684,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-IQ2_S",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 28,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "iq3_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q5_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "ff9c6befed4c5fe994c0f68b43474a4b409d75589b2f43c1d8f36d9f7c3a132a",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq2_s": 42,
+    "iq3_s": 57,
+    "iq3_xxs": 33,
+    "iq4_xs": 1,
+    "q5_k": 14,
+    "q8_0": 48
+   },
+   "predicted_bytes": 843171072,
+   "predicted_gib": 0.785,
+   "predicted_bpw": 3.472,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-IQ2_S-IQ2_XS",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 20,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "iq2_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "iq2_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "0dd0b12aeadbd66bff05a1e1e51e1fb4cd3ad45a525b042b2560f536d88f0a0a",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq2_s": 23,
+    "iq2_xs": 28,
+    "iq3_xxs": 81,
+    "iq4_xs": 1,
+    "q4_k": 6,
+    "q5_k": 8,
+    "q8_0": 48
+   },
+   "predicted_bytes": 802473216,
+   "predicted_gib": 0.747,
+   "predicted_bpw": 3.305,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-IQ2_XS",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 20,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "iq2_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "iq2_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "iq2_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "iq3_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "q4_k"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "0d9f6b839c01dac79f78f9007a6dc6b23ce15c7e03d422a31106fb6946d4cbdb",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq2_s": 33,
+    "iq2_xs": 42,
+    "iq3_xxs": 57,
+    "iq4_xs": 1,
+    "q4_k": 6,
+    "q5_k": 8,
+    "q8_0": 48
+   },
+   "predicted_bytes": 779666688,
+   "predicted_gib": 0.726,
+   "predicted_bpw": 3.211,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-IQ2_XXS",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 19,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "iq2_xs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "iq2_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "iq2_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "iq2_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "21e9813d112a650797966c3a0e310285b49eaf3ec358fd37e5639c82fd35e5e7",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq2_s": 81,
+    "iq2_xs": 9,
+    "iq2_xxs": 42,
+    "iq4_xs": 7,
+    "q5_k": 8,
+    "q8_0": 48
+   },
+   "predicted_bytes": 732873984,
+   "predicted_gib": 0.683,
+   "predicted_bpw": 3.018,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  },
+  {
+   "label": "AD-IQ1_M",
+   "ftype": "Q8_0",
+   "flags": [],
+   "control": false,
+   "file_type": 31,
+   "rules": [
+    [
+     "^blk\\.24\\.",
+     "q5_k"
+    ],
+    [
+     "^blk\\.(0|1|19|20|21|22|23)\\.ffn_(down|gate|up)\\.weight$",
+     "iq2_xs"
+    ],
+    [
+     "^blk\\.(2|3|4)\\.ffn_(down|gate|up)\\.weight$",
+     "iq2_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_down\\.weight$",
+     "iq2_xxs"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_gate\\.weight$",
+     "iq1_m"
+    ],
+    [
+     "^blk\\.\\d+\\.ffn_up\\.weight$",
+     "iq1_m"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_(q|qkv)\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_gate\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.ssm_out\\.weight$",
+     "iq2_s"
+    ],
+    [
+     "^blk\\.\\d+\\.attn_output\\.weight$",
+     "iq4_xs"
+    ],
+    [
+     "^token_embd\\.weight$",
+     "iq4_xs"
+    ]
+   ],
+   "rules_sha256": "903b38959588219a7ccc71863ff4e7db0d06f7c66c810fc2190355a7af4b44e5",
+   "expected_overrides": 147,
+   "type_counts": {
+    "f32": 140,
+    "iq1_m": 28,
+    "iq2_s": 60,
+    "iq2_xs": 21,
+    "iq2_xxs": 23,
+    "iq4_xs": 7,
+    "q5_k": 8,
+    "q8_0": 48
+   },
+   "predicted_bytes": 707314944,
+   "predicted_gib": 0.659,
+   "predicted_bpw": 2.913,
+   "imatrix": true,
+   "no_imatrix_tensors": [
+    "blk.24.attn_k.weight",
+    "blk.24.attn_k_norm.weight",
+    "blk.24.attn_norm.weight",
+    "blk.24.attn_output.weight",
+    "blk.24.attn_q.weight",
+    "blk.24.attn_q_norm.weight",
+    "blk.24.attn_v.weight",
+    "blk.24.ffn_down.weight",
+    "blk.24.ffn_gate.weight",
+    "blk.24.ffn_up.weight",
+    "blk.24.nextn.eh_proj.weight",
+    "blk.24.nextn.enorm.weight",
+    "blk.24.nextn.hnorm.weight",
+    "blk.24.nextn.shared_head_norm.weight",
+    "blk.24.post_attention_norm.weight"
+   ]
+  }
+ ]
+}
