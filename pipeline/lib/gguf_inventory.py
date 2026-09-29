@@ -9,6 +9,7 @@ the weights. Shapes are in ggml order (ne0 first, ne0 is the row length).
 """
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -37,6 +38,21 @@ def scalar(typ, raw):
 
 def mtp_blocks(names):
     return sorted({int(m.group(1)) for n in names if (m := re.match(r"blk\.(\d+)\.nextn\.", n))})
+
+
+# GET_ROWS tables llama.cpp keeps off the GPU even at -ngl 99: token_embd is an input layer
+# tensor (CPU buffer), per_layer_token_embd is TENSOR_READ_LAZY (rows read from the mmap).
+# On Qwen3.8-Flash-Next the second one is 102 GB of the 354 GB BF16.
+HOST_TABLES = ("token_embd.weight", "per_layer_token_embd.weight")
+
+
+def gpu_bytes(inv):
+    """What the GPUs hold of the BF16 with every layer offloaded: f32 at 4 bytes, the rest at 2,
+    without the host tables. A tied head (no output.weight) is token_embd copied to the GPU."""
+    names = {t["name"] for t in inv["tensors"]}
+    host = set(HOST_TABLES) - ({"token_embd.weight"} if "output.weight" not in names else set())
+    return sum(math.prod(t["shape"]) * (4 if t["type"] == "f32" else 2)
+               for t in inv["tensors"] if t["name"] not in host)
 
 
 def finish(arch, block_count, tensors, source, meta=None):

@@ -252,6 +252,112 @@ def node(run, a, box, name, **env):
     return info
 
 
+def rent_side(run, a, stage, n, query, disk):
+    """n more boxes for a stage, rented and prepared (node_prepare) in the background.
+
+    Returns a callable that waits for them and gives the ones that came up; a rental or a
+    preparation that fails costs only its own share (the stage runs on fewer boxes).
+    """
+    got, threads = [None] * n, []
+
+    def one(i):
+        try:
+            b = open_box(run, a, f"{stage}-{i}", query, disk)
+            b["stage"] = f"{stage}-{i}"
+        except (Exception, SystemExit) as e:
+            run.event("side_box_failed", stage=stage, slot=i, error=str(e)[:200])
+            return
+        try:
+            node(run, a, b, "node_prepare")
+        except (Exception, SystemExit) as e:
+            run.event("side_box_failed", stage=stage, slot=i, error=str(e)[:200])
+            close_box(run, a, b)
+            return
+        got[i - 1] = b
+
+    for i in range(1, n + 1):
+        t = threading.Thread(target=one, args=(i,), daemon=True)
+        t.start()
+        threads.append(t)
+
+    def join():
+        for t in threads:
+            t.join()
+        return [b for b in got if b is not None]
+    return join
+
+
+def gpus_of(box):
+    return int((box.get("offer") or {}).get("num_gpus") or 1)
+
+
+def shard_plan(boxes, total=None):
+    """Shard indices per box: one shard per GPU pair, as on one box; with a fixed total, in proportion.
+
+    Contiguous ranges, box 0 first, so index 0 (the merge) is always on the box that converted.
+    A box that would get no shard is left out.
+    """
+    per = [max(1, gpus_of(b) // 2) for b in boxes]
+    if total is None:
+        counts = per
+    else:
+        counts = [total * p // sum(per) for p in per]
+        for i in sorted(range(len(per)), key=lambda i: -per[i])[:total - sum(counts)]:
+            counts[i] += 1
+        counts = [min(c, gpus_of(b)) for c, b in zip(counts, boxes)]
+    out, start = [], 0
+    for b, c in zip(boxes, counts):
+        if c:
+            out.append((b, list(range(start, start + c))))
+            start += c
+    return out, start
+
+
+def imatrix_stage(run, a, box, extra):
+    """The imatrix, on box 0 alone or with its shards spread over the extra boxes (--im-boxes).
+
+    Every box computes its range of shards side by side (IM_MERGE=0) and publishes them; once
+    all are on the hub box 0 merges them and writes the coverage report. A box that fails stops
+    the stage without waiting for it: the shards that made it stay on the hub, and a rerun
+    computes only the missing ones. Returns the extra boxes kept for the quant stage.
+    """
+    if not extra:
+        ngpu = gpus_of(box)
+        shards = max(1, min(a.im_shards or ngpu // 2, ngpu))
+        node(run, a, box, "node_imatrix", RECIPE=a.recipe, IM_TOTAL=shards, IM_INDEX=" ".join(map(str, range(shards))))
+        return []
+    plan, total = shard_plan([box] + list(extra), a.im_shards)
+    used = {id(b) for b, _ in plan}
+    for b in extra:
+        if id(b) not in used:
+            close_box(run, a, b)
+    run.event("imatrix_fanout", shards=total, boxes=[{"box": b["iid"], "shards": idx} for b, idx in plan])
+    failed = []
+
+    def shards(b, idx):
+        try:
+            node(run, a, b, "node_imatrix", RECIPE=a.recipe, IM_TOTAL=total, IM_INDEX=" ".join(map(str, idx)), IM_MERGE=0)
+        except (Exception, SystemExit) as e:
+            failed.append((b["iid"], str(e)[:300]))
+
+    threads = [threading.Thread(target=shards, args=(b, idx), daemon=True) for b, idx in plan]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    keep = a.ladder_ok and a.quant_boxes > 1
+    kept = [b for b, _ in plan[1:]] if keep and not failed else []
+    for b, _ in plan[1:]:
+        if b not in kept:
+            close_box(run, a, b)
+    if failed:
+        raise SystemExit(f"imatrix shards failed on {', '.join(i for i, _ in failed)}: {failed[0][1]}; "
+                         "rerun to compute only the missing shards")
+    # every shard is on the hub now: box 0 merges and reports
+    node(run, a, box, "node_imatrix", RECIPE=a.recipe, IM_TOTAL=total, IM_MERGE="only")
+    return kept
+
+
 def pending_rungs(run, only=None):
     """(label, predicted bytes) of the ladder rungs not yet published and measured, largest first."""
     lad = json.load(open(run.fetch(run.metrics, "dataset", "ladder/ladder.json")[0]))
@@ -260,20 +366,32 @@ def pending_rungs(run, only=None):
     return sorted(((l, size[l]) for l in todo), key=lambda x: -x[1])
 
 
-def quant_fanout(run, a, first, rungs, extra, open_extra, work, release):
-    """Rungs over several boxes: a queue in the driver, one node_quant per rung, largest rungs first.
+def quant_fanout(run, a, first, rungs, extra, open_extra, work, release, batch=1, ready=()):
+    """Rungs over several boxes: a queue in the driver, one node_quant per `batch` rungs, largest first.
 
-    `first` (the box that made the imatrix, or None) starts at once; `extra` more boxes are
-    opened side by side by `open_extra(i)` and join the queue when they are up (a rental that
-    fails costs only its own share). A box is released as soon as the queue has nothing for it.
-    Each rung runs alone, so a box never holds the queue hostage: the others take what is left.
+    `first` (the box that made the imatrix, or None) and the `ready` boxes (extra imatrix boxes
+    kept for this stage: same card, llama.cpp built, BF16 on disk) start at once; `extra` more
+    boxes are opened side by side by `open_extra(i)` and join the queue when they are up (a
+    rental that fails costs only its own share). A box is released as soon as the queue has
+    nothing for it. A node takes `batch` rungs, space separated in one RUNGS: node_quant
+    quantizes the next rung while the GPU measures the previous one, which only pays inside
+    one call; small batches keep a slow box from holding the queue hostage.
     The first failure stops every box from taking a new rung; rungs already running finish.
-    Returns the list of failures (label, error).
+    Returns the list of failures (labels, error).
     """
     q = queue.Queue()
     for label, _ in rungs:
         q.put(label)
     failed, stop = [], threading.Event()
+
+    def take():
+        got = []
+        while len(got) < max(1, batch):
+            try:
+                got.append(q.get_nowait())
+            except queue.Empty:
+                break
+        return " ".join(got)
 
     def worker(box, i):
         try:
@@ -286,9 +404,8 @@ def quant_fanout(run, a, first, rungs, extra, open_extra, work, release):
                     run.event("quant_box_failed", slot=i, error=str(e)[:200])
                     return
             while not stop.is_set():
-                try:
-                    label = q.get_nowait()
-                except queue.Empty:
+                label = take()
+                if not label:
                     break
                 try:
                     work(box, label)
@@ -300,6 +417,7 @@ def quant_fanout(run, a, first, rungs, extra, open_extra, work, release):
                 release(box)
 
     threads = [threading.Thread(target=worker, args=(first, 0), daemon=True)] if first is not None else []
+    threads += [threading.Thread(target=worker, args=(b, -1), daemon=True) for b in ready]
     threads += [threading.Thread(target=worker, args=(None, i), daemon=True) for i in range(1, extra + 1)]
     for t in threads:
         t.start()
@@ -393,24 +511,32 @@ def cmd_gguf(a):
     st, _ = stage_state(run, a.only_rungs)
     run.event("start", model=run.model, main=run.main, metrics=run.metrics, state=st)
     need_box = not (st["convert"] and st["base"] and st["imatrix"] and st["quant"])
-    box = None
+    box, side, kept = None, None, []
     try:
+        size_b = None if a.local_box else model_bytes(run.model)
         if need_box:
-            box = open_box(run, a, "gguf", size_b=None if a.local_box else model_bytes(run.model))
+            box = open_box(run, a, "gguf", size_b=size_b)
+        if not st["imatrix"] and a.im_boxes > 1:
+            # rented and prepared now, while box 0 converts and writes the reference
+            # the gguf box's kind of card (a shard holds the BF16 in VRAM, and a kept box measures KLD
+            # on the card the reference was written on); disk for the BF16 and the corpus, or for the
+            # quant stage when the box will stay for it
+            q, disk = (None, None) if a.local_box else box_plan(size_b, a.gpu_query, None)
+            if disk:
+                disk = (quant_box_plan(size_b, None, a.quant_disk_gb)[1] if a.ladder_ok and a.quant_boxes > 1
+                        else int(size_b / 1e9 * 1.2 + 60))
+            side = rent_side(run, a, "imatrix", a.im_boxes - 1, q, disk)
         if not st["convert"]:
             node(run, a, box, "node_convert", MODEL=run.model, KEEP_MTP=a.keep_mtp)
         if not st["base"]:
             node(run, a, box, "node_base")
         if not st["imatrix"]:
-            ngpu = int(box["offer"].get("num_gpus") or 1)
-            shards = max(1, min(a.im_shards or ngpu // 2, ngpu))
-            node(run, a, box, "node_imatrix", RECIPE=a.recipe, IM_TOTAL=shards,
-                 IM_INDEX=" ".join(map(str, range(shards))))
+            kept = imatrix_stage(run, a, box, side() if side else [])
         if not stage_state(run)[0]["ladder"]:
             ladder_stage(run, a)
         if not stage_state(run, a.only_rungs)[0]["quant"]:
-            if a.quant_boxes > 1:
-                quant_stage(run, a, box)
+            if a.quant_boxes > 1 or kept:
+                quant_stage(run, a, box, kept)
             else:
                 node(run, a, box, "node_quant", PROFILE=a.profile, RUNGS=" ".join(a.only_rungs or []) or None)
         results_stage(run)
@@ -419,18 +545,27 @@ def cmd_gguf(a):
         close_boxes(run, a)
 
 
-def quant_stage(run, a, box):
-    """--quant-boxes N: the rungs over this box and N-1 more (quant_fanout)."""
+def quant_stage(run, a, box, kept=()):
+    """--quant-boxes N: the rungs over this box and N-1 more (quant_fanout).
+
+    `kept` are extra imatrix boxes still up (--im-boxes with --ladder-ok): they count toward
+    the N and start at once, with the BF16 already on disk and llama.cpp built.
+    """
     rungs = pending_rungs(run, a.only_rungs)
-    extra = min(a.quant_boxes - 1, max(len(rungs) - 1, 0))
+    kept = list(kept)[:max(len(rungs) - 1, 0)]
+    for b in list(run.boxes):
+        if b is not box and b not in kept and b.get("stage", "").startswith("imatrix"):
+            close_box(run, a, b)
+    extra = max(0, min(a.quant_boxes - 1 - len(kept), len(rungs) - 1 - len(kept)))
     size_b = None if a.local_box else model_bytes(run.model)
     q, disk = (None, None) if a.local_box else quant_box_plan(size_b, a.quant_gpu_query, a.quant_disk_gb)
-    run.event("quant_fanout", rungs=[l for l, _ in rungs], boxes=1 + extra, query=q, disk_gb=disk)
+    run.event("quant_fanout", rungs=[l for l, _ in rungs], boxes=1 + len(kept) + extra, kept=len(kept),
+              batch=a.quant_batch, query=q, disk_gb=disk)
     failed = quant_fanout(
         run, a, box, rungs, extra,
         open_extra=lambda i: open_box(run, a, f"quant-{i}", q, disk),
         work=lambda b, label: node(run, a, b, "node_quant", PROFILE=a.profile, RUNGS=label),
-        release=lambda b: close_box(run, a, b))
+        release=lambda b: close_box(run, a, b), batch=a.quant_batch, ready=kept)
     if failed:
         for label, err in failed:
             run.event("quant_failed", rung=label, error=err)
@@ -526,12 +661,18 @@ def main():
     p.add_argument("--llama-commit", required=True)
     p.add_argument("--llama-repo", default="https://github.com/ggml-org/llama.cpp")
     p.add_argument("--keep-mtp", default="1")
-    p.add_argument("--im-shards", type=int)
+    p.add_argument("--im-shards", type=int, help="imatrix shards in all (default: one per GPU pair of every box)")
+    p.add_argument("--im-boxes", type=int, default=1,
+                   help="compute the imatrix shards on this many boxes of the gguf box's kind (the first is the gguf "
+                        "box); the extra ones are rented while it converts, and with --ladder-ok and --quant-boxes "
+                        "they go on to quantize")
     p.add_argument("--only-rungs", nargs="*")
     p.add_argument("--quant-boxes", type=int, default=1,
                    help="quantize and measure the rungs on this many boxes side by side (the first is the gguf box)")
     p.add_argument("--quant-gpu-query", help="vast query for the extra quant boxes (default: quant_box_plan)")
     p.add_argument("--quant-disk-gb", type=int)
+    p.add_argument("--quant-batch", type=int, default=2,
+                   help="rungs per node_quant call on a box: it quantizes the next while measuring the previous")
     p.add_argument("--ladder-ok", action="store_true", help="skip the interactive ladder review")
     p.add_argument("--ctx", type=int, help="KLD context (default 4096, the published protocol)")
     p.add_argument("--kld-chunks", type=int, help="KLD chunks (default all); a smaller number is for test runs")
@@ -563,6 +704,8 @@ def main():
         sys.exit("--local-box needs --local-hub: the container can not write to the real hub without a token")
     if getattr(a, "quant_boxes", 1) > 1 and a.local_hub and not a.local_box:
         sys.exit("--quant-boxes needs a hub every box can reach: the real one, or --local-box containers")
+    if getattr(a, "im_boxes", 1) > 1 and a.local_hub and not a.local_box:
+        sys.exit("--im-boxes needs a hub every box can reach: the real one, or --local-box containers")
     if a.local_hub and a.cmd in ("ablit", "nvfp4") and not a.local_box:
         sys.exit("--local-hub needs --local-box for ablit and nvfp4: those nodes publish to the hub")
     if not a.local_hub:

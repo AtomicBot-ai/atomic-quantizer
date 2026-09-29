@@ -98,3 +98,37 @@ def test_quant_box_plan_keeps_the_card_and_fits_the_reference():
     q, disk = release.quant_box_plan(55.6e9)
     assert "RTX_5090" in q and "cuda_max_good" in q
     assert disk >= 55 + 2 * 88 + 30   # BF16, the reference while its parts are joined, Q8_0
+
+
+def test_batches_go_to_one_node_call():
+    calls, lock = [], threading.Lock()
+
+    def work(box, labels):
+        time.sleep(0.01)
+        with lock:
+            calls.append((box["iid"], labels))
+
+    rungs = [f"R{i}" for i in range(7)]
+    run, released = FakeRun(), []
+    failed = release.quant_fanout(run, types.SimpleNamespace(), {"iid": "first"}, [(r, 0) for r in rungs], 0,
+                                  None, work, released.append, batch=3)
+    assert failed == []
+    assert [len(l.split()) for _, l in calls] == [3, 3, 1]
+    assert sorted(x for _, l in calls for x in l.split()) == sorted(rungs)
+
+
+def test_ready_boxes_start_at_once_and_are_released():
+    done, lock = [], threading.Lock()
+
+    def work(box, label):
+        time.sleep(0.02)
+        with lock:
+            done.append((box["iid"], label))
+
+    rented = []
+    run, released = FakeRun(), []
+    failed = release.quant_fanout(run, types.SimpleNamespace(), {"iid": "first"}, [(f"R{i}", 0) for i in range(6)], 0,
+                                  lambda i: rented.append(i), work, released.append, ready=[{"iid": "kept1"}])
+    assert failed == [] and rented == []
+    assert {b for b, _ in done} == {"first", "kept1"}
+    assert [b["iid"] for b in released] == ["kept1"]

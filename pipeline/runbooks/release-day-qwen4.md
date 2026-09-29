@@ -39,6 +39,9 @@ Check by hand, each one is a stop sign:
 ```bash
 caffeinate -i python driver/release.py gguf --model Qwen/Qwen4-XXB --recipe <build> --profile <profile> \
     --llama-commit <sha> --quant-boxes 4
+# faster: the imatrix on three boxes, those boxes then quantize too (~1.5 h, estimate)
+caffeinate -i python driver/release.py gguf --model Qwen/Qwen4-XXB --recipe <build> --profile <profile> \
+    --llama-commit <sha> --im-boxes 3 --quant-boxes 4 --ladder-ok
 ```
 
 Where the hours go, measured on the 27B (box side, from the nodes' own
@@ -64,8 +67,29 @@ for one box was $2.90 of download against $1.13 of GPU (`vast.search` now asks
 for `inet_down_cost<=0.01`), and the laptop sleeping twice with the lid closed
 while four boxes waited (~$2.5; `caffeinate -i` does not cover a closed lid).
 
-The imatrix is now two thirds of the wall time; it runs two shards on one box.
-Spreading shards over boxes (`--im-boxes`, in progress) is the next saving.
+The imatrix is two thirds of the wall time on one box. With `--im-boxes 3`
+(an estimate from the numbers above, not yet run on a 27B):
+
+| minutes | box 0 | boxes 1-2 | box 3 |
+|---|---|---|---|
+| 0-16 | convert, base reference | rented, llama.cpp built (`node_prepare`), idle | |
+| 11-45 | shards 0-1 (from 16) | shards 2-5, BF16 from the hub first | |
+| ~50 | merge, coverage and convergence report, ladder | | rented |
+| 50-90 | rungs, 2 per node call | the same boxes go on with rungs | rungs |
+
+- The shards are the same GPU work split six ways (~33 min instead of 99); the
+  extra cost is boxes 1-2 waiting through the convert (~$1).
+- A box that fails stops the stage at once; the shards that made it stay on the
+  hub and a rerun computes only the missing ones.
+- With `--ladder-ok` the imatrix boxes are not released but quantize: same card
+  as the reference, llama.cpp built, BF16 on disk, which saves most of the
+  13-18 min a fresh quant box spends before its first rung. Without it they are
+  released before the review.
+- `--quant-batch` (default 2) rungs per node call: inside a call the next rung
+  quantizes while the GPU measures the previous one (~2.5 min of KLD hidden per
+  rung); 1 balances best across boxes.
+- For Flash-Next (354 GB) every extra box downloads the BF16 and needs ~380 GB
+  of VRAM: two boxes at most.
 
 Runs convert, base reference, imatrix, then stops at the **ladder review**: it
 prints every rung with its predicted size and asks before quantizing. If the
