@@ -160,7 +160,10 @@ with bands of the same size from each source, KLD against BF16, 30 chunks:
   2026-09-29, 87 chunks) the tail quarter costs three times the others and
   the head is no more sensitive than the middle: scan bands (edge 48-63,
   mid 40-47 against August 0-3 + 52-63, mid 4-11) tie at AD-Q5_K_M-Q4_K_M and
-  AD-IQ4_XS and win at AD-IQ3_S, -4.6 % KLD (z -4.7), top-1 +0.31 pp. Logs in
+  AD-IQ4_XS and win at AD-IQ3_S, -4.6 % KLD (z -4.7), top-1 +0.31 pp. The
+  gain is the edge band over the whole last quarter: the same edge with the
+  mid band at 0-7 instead of 40-47 gives the same KLD (-0.1 %, z -0.1), so the
+  mid position is noise at that size. Logs in
   AtomicChat/Qwen3.8-27B-GGUF-metrics-rehearsal, stageb/.
 - band_select on raw Sum(Act^2) is not a default: on ffn_down the sum grows
   with depth, so it bands only the tail, drops blocks 0-7, and loses 9-21 % to
