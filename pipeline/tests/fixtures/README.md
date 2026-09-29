@@ -42,6 +42,7 @@ inventory comes from the converter reading safetensors headers over HTTP.
 |---|---|---|
 | `inventory.json` | `gguf_inventory.py --from-convert-log` of `convert_hf_to_gguf.py --remote Qwen/Qwen3.8-Flash-Next --dry-run --outtype bf16`, model revision `de4b8e4d43b9`, llama.cpp `957538960` (upstream master of 2026-09-23). 1224 tensors, 354.0 GB | `c6f96b632def46fa` |
 | `release-AD-3.84bpw.types.json` | the type of every tensor in `AtomicChat/Qwen3.8-Flash-Next-GGUF` `Qwen3.8-Flash-Next-AD-3.84bpw-IQ4_XS-M64/` at revision `142262902a`, read from the headers of its 28 shards, plus four header keys | `d199d15d74f910df` |
+| `imatrix-4000.stats.txt` | `im_report.py stats` of `imatrix/imatrix-4000.gguf` in `AtomicChat/Qwen3.8-Flash-Next-GGUF-metrics` at revision `cf11ded0dfcd`: the August BF16 matrix, 4000 chunks of 512 on the dense-share build, llama.cpp PR #27742 (before the GDN normalisation fix `5fdfa62829`) | `ec4285687f388283` |
 
 The same dry run on Qwen3.8-27B gave the 866 tensors of the August 27B release
 with identical names, types and shapes, which is what makes the Flash-Next
